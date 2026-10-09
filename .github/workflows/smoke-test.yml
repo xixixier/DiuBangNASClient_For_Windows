@@ -1,0 +1,62 @@
+name: Smoke Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/smoke-test.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  smoke:
+    runs-on: windows-2022
+    steps:
+      - name: Download latest installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo ${{ github.repository }} --pattern "*Setup*.exe" --dir dl
+          Get-ChildItem dl
+
+      - name: Silent install
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem dl\*.exe)[0].FullName
+          Start-Process $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait
+          Get-ChildItem "C:\Program Files\DiuBangNASClient" | Select-Object Name,Length | Format-Table | Out-String | Write-Output
+
+      - name: Launch and capture
+        shell: pwsh
+        run: |
+          $app = "C:\Program Files\DiuBangNASClient\diubang_nasclient.exe"
+          $p = Start-Process $app -PassThru
+          Start-Sleep -Seconds 25
+          $alive = -not $p.HasExited
+          $report = @()
+          $report += "alive=$alive"
+          if (-not $alive) { $report += "exitcode=$($p.ExitCode)" }
+          $procs = Get-Process diubang_nasclient -ErrorAction SilentlyContinue
+          $report += "processes=$(@($procs).Count)"
+          if ($procs) { $report += "title=$($procs[0].MainWindowTitle)"; $report += "workingSetMB=$([math]::Round($procs[0].WorkingSet64/1MB,1))" }
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2; StartTime=(Get-Date).AddMinutes(-3)} -ErrorAction SilentlyContinue |
+            Select-Object -First 5 | ForEach-Object { $report += "event: $($_.ProviderName): $($_.Message -replace '\s+',' ')" }
+          $report | Set-Content smoke-report.txt -Encoding utf8
+          Get-Content smoke-report.txt
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$PWD\smoke-screenshot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+
+      - name: Publish results
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view smoke-test --repo ${{ github.repository }} 2>$null
+          if ($LASTEXITCODE -ne 0) { gh release create smoke-test --repo ${{ github.repository }} --prerelease --title "Smoke test results" --notes "自动冒烟测试截图与报告" }
+          gh release upload smoke-test smoke-report.txt smoke-screenshot.png --repo ${{ github.repository }} --clobber
