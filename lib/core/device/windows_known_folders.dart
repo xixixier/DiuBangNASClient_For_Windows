@@ -21,7 +21,7 @@ class WindowsKnownFolders {
     String? resolved;
     try {
       resolved = await PathProviderWindows().getPath(
-        WindowsKnownFolder.Pictures,
+        '{33E28130-4E1E-4676-835A-98395C3BC3BB}', // FOLDERID_Pictures
       );
     } catch (_) {
       resolved = null;
