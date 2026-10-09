@@ -1,4 +1,8 @@
-# DiuBangNASClient
+# DiuBangNASClient for Windows
+
+> 本项目基于 [DianDanHuaJuan/DiuBangNASClient](https://github.com/DianDanHuaJuan/DiuBangNASClient)（Flutter Android 客户端，MIT 许可）移植开发，增加了 Windows 桌面端支持。
+> 配套服务端：[DiuBangNASServer_Windows](https://github.com/DianDanHuaJuan/DiuBangNASServer_Windows) · [diubangNASServer_Android](https://github.com/DianDanHuaJuan/diubangNASServer_Android)。
+> Windows 适配中的 mDNS、托盘、SQLite FFI、Inno Setup 打包等做法参考了 DiuBangNASServer_Windows。原项目版权归原作者所有，详见 [LICENSE](LICENSE)。
 
 局域网 NAS 客户端（Flutter，支持 Android 与 Windows）：支持 mDNS 服务发现、WebDAV 文件访问、媒体预览、定时备份，以及通过 NAS 中转的设备间文件互传。
 
