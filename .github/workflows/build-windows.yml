@@ -27,10 +27,29 @@ jobs:
         run: flutter config --enable-windows-desktop
 
       - name: Install dependencies
-        run: flutter pub get
+        shell: pwsh
+        run: |
+          flutter pub get 2>&1 | Tee-Object -FilePath pub.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content pub.log | Select-Object -Last 40 | ForEach-Object { Write-Output "::error::$_" }
+            exit 1
+          }
+
+      - name: Analyze (errors only)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | Tee-Object -FilePath analyze.log
+          Get-Content analyze.log | Where-Object { $_ -match '^\s*error' } | Select-Object -First 40 | ForEach-Object { Write-Output "::error::$_" }
 
       - name: Build Windows release
-        run: flutter build windows --release
+        shell: pwsh
+        run: |
+          flutter build windows --release 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content build.log | Where-Object { $_ -match 'error|Error|failed' } | Select-Object -First 45 | ForEach-Object { Write-Output "::error::$_" }
+            exit 1
+          }
 
       - name: Deploy MSVC runtime
         shell: pwsh
