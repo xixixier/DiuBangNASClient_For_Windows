@@ -4,9 +4,9 @@
 /// 文件包含：DashboardPage
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:go_router/go_router.dart';
+import 'package:flutter/services.dart';
 import '../../../../app/di/service_locator.dart';
-import '../../../../app/router/route_names.dart';
+import '../../../../core/desktop/desktop_ui.dart';
 import '../../../../core/realtime/realtime_connection_state.dart';
 import '../../../../core/realtime/realtime_session_service.dart';
 import '../cubit/dashboard_cubit.dart';
@@ -17,60 +17,86 @@ class DashboardPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currentServer = serviceLocator.unifiedNodeStore.currentServer;
-    final queryParameters = <String, String>{
-      if ((currentServer?.network.connectBaseUrl ?? '').isNotEmpty)
-        'serverUrl': currentServer!.network.connectBaseUrl!,
-      if ((currentServer?.identity.displayName ?? '').isNotEmpty)
-        'serverName': currentServer!.identity.displayName,
-    };
-    final loginLocation = Uri(
-      path: RouteNames.login,
-      queryParameters: queryParameters.isEmpty ? null : queryParameters,
-    ).toString();
-
-    return Scaffold(
-      appBar: AppBar(
-        leadingWidth: 150,
-        leading: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () => context.go(loginLocation),
-          child: Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.arrow_back_ios_new_rounded,
-                  size: 24,
-                  color: Color(0xFF6D6C6A),
-                ),
-                const SizedBox(width: 2),
-                Text(
-                  '返回登录页',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF6D6C6A),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-      body: BlocBuilder<DashboardCubit, DashboardState>(
+    return ColoredBox(
+      color: DesktopTokens.background,
+      child: BlocBuilder<DashboardCubit, DashboardState>(
         builder: (context, state) {
-          if (state is DashboardLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
+          final cubit = context.read<DashboardCubit>();
+          final realtimeService = context.read<RealtimeSessionService>();
+          final header = DesktopPageHeader(
+            title: '概览',
+            actions: [
+              if (state is DashboardLoaded) ...[
+                _StatusBadge(
+                  label: _realtimeStatusLabel(
+                    state.realtimeConnectionStatus,
+                    serverName: serviceLocator
+                        .unifiedNodeStore
+                        .currentServer
+                        ?.identity
+                        .displayName,
+                  ),
+                  color: _realtimeStatusColor(state.realtimeConnectionStatus),
+                ),
+                if (state.canManualReconnect || state.isConnecting) ...[
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 34),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                    onPressed: state.isConnecting
+                        ? null
+                        : () async {
+                            await realtimeService.reconnectNow();
+                            if (!context.mounted) return;
+                            if (!realtimeService.isConnected) {
+                              ScaffoldMessenger.of(context)
+                                ..hideCurrentSnackBar()
+                                ..showSnackBar(
+                                  const SnackBar(
+                                    content: Text('连接服务器失败，请检查网络或服务器状态'),
+                                    duration: Duration(seconds: 3),
+                                  ),
+                                );
+                            }
+                          },
+                    icon: state.isConnecting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.refresh_rounded, size: 18),
+                    label: Text(
+                      state.isConnecting
+                          ? '正在连接...'
+                          : state.realtimeConnectionStatus ==
+                                RealtimeConnectionStatus.reconnecting
+                          ? '立即重试'
+                          : '重新连接',
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 4),
+              ],
+              ToolbarIconButton(
+                icon: Icons.refresh_rounded,
+                tooltip: '刷新（F5）',
+                onPressed: () => cubit.loadDashboard(force: true),
+              ),
+            ],
+          );
 
-          if (state is DashboardError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 28),
+          Widget body;
+          if (state is DashboardLoading) {
+            body = const Center(child: CircularProgressIndicator());
+          } else if (state is DashboardError) {
+            body = Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     const Icon(
                       Icons.cloud_off_outlined,
@@ -89,106 +115,85 @@ class DashboardPage extends StatelessWidget {
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 18),
-                    ElevatedButton(
-                      onPressed: () =>
-                          context.read<DashboardCubit>().loadDashboard(force: true),
+                    FilledButton(
+                      onPressed: () => cubit.loadDashboard(force: true),
                       child: const Text('重新加载'),
                     ),
                   ],
                 ),
               ),
             );
-          }
-
-          if (state is DashboardLoaded) {
-            final realtimeService = context.read<RealtimeSessionService>();
-            return RefreshIndicator(
-              onRefresh: () => context.read<DashboardCubit>().loadDashboard(force: true),
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(24, 12, 24, 112),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _StatusBadge(
-                          label: _realtimeStatusLabel(
-                            state.realtimeConnectionStatus,
-                            serverName: serviceLocator
-                                .unifiedNodeStore
-                                .currentServer
-                                ?.identity
-                                .displayName,
-                          ),
-                          color: _realtimeStatusColor(
-                            state.realtimeConnectionStatus,
-                          ),
-                        ),
-                        if (state.canManualReconnect || state.isConnecting)
-                          OutlinedButton.icon(
-                            onPressed: state.isConnecting
-                                ? null
-                                : () async {
-                                    await realtimeService.reconnectNow();
-                                    if (!context.mounted) return;
-                                    if (!realtimeService.isConnected) {
-                                      ScaffoldMessenger.of(context)
-                                        ..hideCurrentSnackBar()
-                                        ..showSnackBar(
-                                          const SnackBar(
-                                            content: Text('连接服务器失败，请检查网络或服务器状态'),
-                                            duration: Duration(seconds: 3),
-                                          ),
-                                        );
-                                    }
-                                  },
-                            icon: state.isConnecting
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.refresh_rounded, size: 18),
-                            label: Text(
-                              state.isConnecting
-                                  ? '正在连接...'
-                                  : state.realtimeConnectionStatus ==
-                                          RealtimeConnectionStatus.reconnecting
-                                      ? '立即重试'
-                                      : '重新连接',
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    _DeviceInfoCard(
-                      serverName: state.serverName,
-                      brand: state.deviceBrand,
-                      model: state.deviceModel,
-                      batteryPercent: state.batteryPercent,
-                      isCharging: state.isCharging,
-                      localIp: state.localIp,
-                    ),
-                    const SizedBox(height: 16),
-                    _StorageStatusCard(
-                      totalBytes: state.storageTotal,
-                      usedBytes: state.storageUsed,
-                      availableBytes: state.storageAvailable,
-                    ),
-                  ],
+          } else if (state is DashboardLoaded) {
+            final deviceCard = _DeviceInfoCard(
+              serverName: state.serverName,
+              brand: state.deviceBrand,
+              model: state.deviceModel,
+              batteryPercent: state.batteryPercent,
+              isCharging: state.isCharging,
+              localIp: state.localIp,
+            );
+            final storageCard = _StorageStatusCard(
+              totalBytes: state.storageTotal,
+              usedBytes: state.storageUsed,
+              availableBytes: state.storageAvailable,
+            );
+            body = SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(
+                DesktopTokens.pagePadding,
+                4,
+                DesktopTokens.pagePadding,
+                DesktopTokens.pagePadding,
+              ),
+              child: DesktopContent(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    if (constraints.maxWidth < 820) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          deviceCard,
+                          const SizedBox(height: 16),
+                          storageCard,
+                        ],
+                      );
+                    }
+                    return IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: deviceCard),
+                          const SizedBox(width: 16),
+                          Expanded(child: storageCard),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ),
             );
+          } else {
+            body = Center(
+              child: TextButton(
+                onPressed: () => cubit.loadDashboard(force: true),
+                child: const Text('加载设备概览'),
+              ),
+            );
           }
-          return Center(
-            child: TextButton(
-              onPressed: () => context.read<DashboardCubit>().loadDashboard(force: true),
-              child: const Text('加载设备概览'),
+
+          return CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.f5): () =>
+                  cubit.loadDashboard(force: true),
+            },
+            child: Focus(
+              autofocus: false,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  header,
+                  Expanded(child: body),
+                ],
+              ),
             ),
           );
         },
@@ -291,15 +296,9 @@ class _DeviceInfoCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFFF5F4F1),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0x0A000000),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: DesktopTokens.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -434,15 +433,9 @@ class _StorageStatusCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFFF5F4F1),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0x0A000000),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: DesktopTokens.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -458,8 +451,8 @@ class _StorageStatusCard extends StatelessWidget {
           Row(
             children: [
               SizedBox(
-                width: 100,
-                height: 100,
+                width: 132,
+                height: 132,
                 child: CustomPaint(
                   painter: _CircularProgressPainter(
                     progress: usedPercentage,

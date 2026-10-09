@@ -133,15 +133,22 @@ class DesktopRuntimeController with WindowListener {
     }
     _windowPresented = true;
 
+    final savedBounds = _usableSavedBounds();
     await _windowManager.waitUntilReadyToShow(
-      const WindowOptions(
-        size: initialWindowSize,
+      WindowOptions(
+        size: savedBounds?.size ?? initialWindowSize,
         minimumSize: minimumWindowSize,
-        center: true,
+        center: savedBounds == null,
         skipTaskbar: false,
         title: appTitle,
       ),
       () async {
+        if (savedBounds != null) {
+          await _windowManager.setPosition(savedBounds.topLeft);
+        }
+        if (_settingsStore?.windowMaximized ?? false) {
+          await _windowManager.maximize();
+        }
         await _ensureTrayInitialized();
         if (_launchHidden && _trayReady) {
           await _hideWindowToTray();
@@ -199,6 +206,55 @@ class DesktopRuntimeController with WindowListener {
     }
   }
 
+  Timer? _boundsSaveTimer;
+
+  /// 只在记录看起来仍位于屏幕上时恢复，避免外接显示器拔掉后窗口跑到屏幕外。
+  Rect? _usableSavedBounds() {
+    final bounds = _settingsStore?.windowBounds;
+    if (bounds == null) return null;
+    if (bounds.left < -200 || bounds.top < -50) return null;
+    if (bounds.left > 6000 || bounds.top > 4000) return null;
+    final width = bounds.width < minimumWindowSize.width
+        ? minimumWindowSize.width
+        : bounds.width;
+    final height = bounds.height < minimumWindowSize.height
+        ? minimumWindowSize.height
+        : bounds.height;
+    return Rect.fromLTWH(bounds.left, bounds.top, width, height);
+  }
+
+  void _scheduleBoundsSave() {
+    _boundsSaveTimer?.cancel();
+    _boundsSaveTimer = Timer(const Duration(milliseconds: 600), () async {
+      try {
+        if (await _windowManager.isMaximized() ||
+            await _windowManager.isMinimized() ||
+            !await _windowManager.isVisible()) {
+          return;
+        }
+        final bounds = await _windowManager.getBounds();
+        await _settingsStore?.saveWindowBounds(bounds);
+      } catch (_) {}
+    });
+  }
+
+  @override
+  void onWindowResized() => _scheduleBoundsSave();
+
+  @override
+  void onWindowMoved() => _scheduleBoundsSave();
+
+  @override
+  void onWindowMaximize() {
+    unawaited(_settingsStore?.saveWindowMaximized(true));
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    unawaited(_settingsStore?.saveWindowMaximized(false));
+    _scheduleBoundsSave();
+  }
+
   @override
   void onWindowClose() {
     if (_isExiting) {
@@ -232,7 +288,9 @@ class DesktopRuntimeController with WindowListener {
             unawaited(showWindow());
             return;
           case kSystemTrayEventRightClick:
-            unawaited(_safeRefreshTray().then((_) => _systemTray.popUpContextMenu()));
+            unawaited(
+              _safeRefreshTray().then((_) => _systemTray.popUpContextMenu()),
+            );
             return;
         }
       });

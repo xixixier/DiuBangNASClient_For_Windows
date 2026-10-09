@@ -60,6 +60,24 @@ class QueueUploadToServerDirectory {
     required NasPath targetPath,
   }) async {
     final paths = await serviceLocator.deviceFileService.pickUploadFiles();
+    if (paths.isEmpty || !context.mounted) {
+      return null;
+    }
+    return queueLocalPaths(
+      context,
+      transferCubit: transferCubit,
+      targetPath: targetPath,
+      paths: paths,
+    );
+  }
+
+  /// 桌面端：把一组本地文件路径（拖放进来的文件或文件选择器结果）加入上传队列。
+  Future<QueuedServerUploadResult?> queueLocalPaths(
+    BuildContext context, {
+    required TransferCubit transferCubit,
+    required NasPath targetPath,
+    required List<String> paths,
+  }) async {
     if (paths.isEmpty) {
       return null;
     }

@@ -8,6 +8,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../app/di/service_locator.dart';
+import '../../../../core/desktop/desktop_runtime_controller.dart';
+import '../../../../core/desktop/desktop_settings_store.dart';
+import '../../../../core/desktop/desktop_ui.dart';
 import '../../../../core/device/client_identity_service.dart';
 import '../../../../core/device/local_media_picker.dart';
 import '../../../../core/node/device_alias_constraints.dart';
@@ -63,51 +66,170 @@ class SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final profileStore =
-        userProfileStore ?? serviceLocator.userProfileStore;
+    final profileStore = userProfileStore ?? serviceLocator.userProfileStore;
     final identityService =
         clientIdentityService ?? serviceLocator.clientIdentityService;
     final deviceIdentity =
         deviceIdentityService ?? serviceLocator.deviceIdentityService;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 64, 24, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '设置',
-                style: Theme.of(
-                  context,
-                ).textTheme.headlineMedium?.copyWith(fontSize: 28),
+    return ColoredBox(
+      color: DesktopTokens.background,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const DesktopPageHeader(title: '设置'),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(
+                DesktopTokens.pagePadding,
+                4,
+                DesktopTokens.pagePadding,
+                DesktopTokens.pagePadding,
               ),
-              const SizedBox(height: 24),
-              _DeviceIdentitySettingsTile(
-                identityStore: profileStore,
-                clientIdentityService: identityService,
-                deviceIdentityService: deviceIdentity,
-              ),
-              const SizedBox(height: 24),
-              _SettingsEntryTile(
-                icon: Icons.backup_table_outlined,
-                title: '文件备份',
-                onTap: () => _openBackupPage(context),
-              ),
-              if (BenchmarkFeature.enabled) ...[
-                const SizedBox(height: 16),
-                _SettingsEntryTile(
-                  icon: Icons.speed_rounded,
-                  title: '传输测速',
-                  subtitle: '独立 benchmark 模块，用于 direct / relay 诊断测速',
-                  onTap: () => _openBenchmarkPage(context),
+              child: DesktopContent(
+                maxWidth: 760,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _DeviceIdentitySettingsTile(
+                      identityStore: profileStore,
+                      clientIdentityService: identityService,
+                      deviceIdentityService: deviceIdentity,
+                    ),
+                    const SizedBox(height: 24),
+                    _SettingsEntryTile(
+                      icon: Icons.backup_table_outlined,
+                      title: '文件备份',
+                      onTap: () => _openBackupPage(context),
+                    ),
+                    if (BenchmarkFeature.enabled) ...[
+                      const SizedBox(height: 16),
+                      _SettingsEntryTile(
+                        icon: Icons.speed_rounded,
+                        title: '传输测速',
+                        subtitle: '独立 benchmark 模块，用于 direct / relay 诊断测速',
+                        onTap: () => _openBenchmarkPage(context),
+                      ),
+                    ],
+                    if (DesktopRuntimeController.isSupported) ...[
+                      const SizedBox(height: 28),
+                      const _DesktopSettingsSection(),
+                    ],
+                  ],
                 ),
-              ],
-            ],
+              ),
+            ),
           ),
-        ),
+        ],
       ),
+    );
+  }
+}
+
+/// Windows 桌面端：关闭到托盘、开机自启、自启时隐藏窗口。
+class _DesktopSettingsSection extends StatelessWidget {
+  const _DesktopSettingsSection();
+
+  Future<void> _apply(BuildContext context, DesktopSettings next) async {
+    try {
+      await DesktopRuntimeController.instance.applySettings(next);
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('设置保存失败：$error')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = DesktopRuntimeController.instance.settingsStore;
+    if (store == null) {
+      return const SizedBox.shrink();
+    }
+    return ValueListenableBuilder<DesktopSettings>(
+      valueListenable: store.settings,
+      builder: (context, settings, _) {
+        Widget tile({
+          required IconData icon,
+          required String title,
+          required String subtitle,
+          required bool value,
+          required ValueChanged<bool>? onChanged,
+        }) {
+          return SwitchListTile(
+            secondary: Icon(icon, color: DesktopTokens.textSecondary),
+            title: Text(title, style: const TextStyle(fontSize: 14)),
+            subtitle: Text(
+              subtitle,
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: DesktopTokens.textSecondary,
+              ),
+            ),
+            value: value,
+            onChanged: onChanged,
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(left: 4, bottom: 8),
+              child: Text(
+                'Windows',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: DesktopTokens.textSecondary,
+                ),
+              ),
+            ),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: DesktopTokens.border),
+              ),
+              child: Column(
+                children: [
+                  tile(
+                    icon: Icons.minimize_rounded,
+                    title: '关闭窗口时最小化到托盘',
+                    subtitle: '保持后台运行，定时备份不会中断',
+                    value: settings.closeToTray,
+                    onChanged: (v) =>
+                        _apply(context, settings.copyWith(closeToTray: v)),
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  tile(
+                    icon: Icons.power_settings_new_rounded,
+                    title: '开机自动启动',
+                    subtitle: '登录 Windows 后自动运行铥棒文件',
+                    value: settings.launchAtStartup,
+                    onChanged: (v) =>
+                        _apply(context, settings.copyWith(launchAtStartup: v)),
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  tile(
+                    icon: Icons.visibility_off_outlined,
+                    title: '自启时不显示窗口',
+                    subtitle: '开机启动后直接驻留在系统托盘',
+                    value: settings.launchMinimized,
+                    onChanged: settings.launchAtStartup
+                        ? (v) => _apply(
+                            context,
+                            settings.copyWith(launchMinimized: v),
+                          )
+                        : null,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -201,16 +323,18 @@ class _DeviceIdentitySettingsTileState
       if (previousPath != null &&
           previousPath.isNotEmpty &&
           previousPath != latestPath) {
-        PaintingBinding.instance.imageCache.evict(FileImage(File(previousPath)));
+        PaintingBinding.instance.imageCache.evict(
+          FileImage(File(previousPath)),
+        );
       }
       setState(() => _avatarPath = latestPath);
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('头像保存失败：$error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('头像保存失败：$error')));
     }
   }
 
@@ -225,9 +349,9 @@ class _DeviceIdentitySettingsTileState
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('清除头像失败：$error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('清除头像失败：$error')));
     }
   }
 
@@ -244,9 +368,9 @@ class _DeviceIdentitySettingsTileState
     final validationError = DeviceAliasConstraints.validate(result);
     if (validationError != null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(validationError)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(validationError)));
       }
       return;
     }
@@ -261,9 +385,9 @@ class _DeviceIdentitySettingsTileState
         final message = error is ArgumentError
             ? error.message?.toString() ?? '名称无效'
             : '名称保存失败：$error';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
       }
     }
   }
@@ -334,7 +458,8 @@ class _EditDisplayAliasDialog extends StatefulWidget {
   final String? initialAlias;
 
   @override
-  State<_EditDisplayAliasDialog> createState() => _EditDisplayAliasDialogState();
+  State<_EditDisplayAliasDialog> createState() =>
+      _EditDisplayAliasDialogState();
 }
 
 class _EditDisplayAliasDialogState extends State<_EditDisplayAliasDialog> {
@@ -359,9 +484,7 @@ class _EditDisplayAliasDialogState extends State<_EditDisplayAliasDialog> {
       content: TextField(
         controller: _controller,
         autofocus: true,
-        decoration: const InputDecoration(
-          hintText: '例如：客厅平板',
-        ),
+        decoration: const InputDecoration(hintText: '例如：客厅平板'),
       ),
       actions: [
         TextButton(

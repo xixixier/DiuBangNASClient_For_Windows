@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../app/di/service_locator.dart';
 import '../../../../core/node/device_display_extensions.dart';
 import '../../../../core/node/unified_node.dart';
+import '../../../../core/desktop/desktop_ui.dart';
 import '../../../transfer/presentation/cubit/transfer_cubit.dart';
 import '../cubit/relay_cubit.dart';
 import '../cubit/relay_state.dart';
@@ -12,8 +13,100 @@ import '../widgets/relay_record_list.dart';
 import 'device_chat_page.dart';
 import 'server_transfer_chat_page.dart';
 
-class RelayPage extends StatelessWidget {
+/// 桌面端：左侧设备列表 + 右侧会话（宽度不足时退回为点击进入新页面）。
+class RelayPage extends StatefulWidget {
   const RelayPage({super.key});
+
+  @override
+  State<RelayPage> createState() => _RelayPageState();
+}
+
+class _RelayPageState extends State<RelayPage> {
+  static const double _masterDetailBreakpoint = 900;
+  static const String _serverKey = '__server__';
+
+  String? _selectedKey;
+
+  void _select(RelayDeviceSummary device) {
+    final key = device.isServer ? _serverKey : device.clientId;
+    if (_selectedKey == key) return;
+    setState(() => _selectedKey = key);
+    final relayCubit = context.read<RelayCubit>();
+    // 旧会话的 dispose 会把 activePeer 清空，这里在下一帧重新设置。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      relayCubit.setActivePeer(device.isServer ? null : device.clientId);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < _masterDetailBreakpoint) {
+          return const _RelayDeviceList(onSelect: null, selectedKey: null);
+        }
+        final relayCubit = context.read<RelayCubit>();
+        final transferCubit = context.read<TransferCubit>();
+        Widget detail;
+        if (_selectedKey == null) {
+          detail = const Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.devices_other_outlined,
+                  size: 52,
+                  color: DesktopTokens.textTertiary,
+                ),
+                SizedBox(height: 12),
+                Text(
+                  '在左侧选择一台设备，开始互传文件或发消息',
+                  style: TextStyle(color: DesktopTokens.textSecondary),
+                ),
+              ],
+            ),
+          );
+        } else if (_selectedKey == _serverKey) {
+          detail = BlocProvider<TransferCubit>.value(
+            key: const ValueKey<String>(_serverKey),
+            value: transferCubit,
+            child: const ServerTransferChatPage(),
+          );
+        } else {
+          detail = BlocProvider<RelayCubit>.value(
+            key: ValueKey<String>(_selectedKey!),
+            value: relayCubit,
+            child: DeviceChatPage(peerClientId: _selectedKey!),
+          );
+        }
+        return ColoredBox(
+          color: DesktopTokens.background,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 360,
+                child: _RelayDeviceList(
+                  onSelect: _select,
+                  selectedKey: _selectedKey,
+                ),
+              ),
+              const VerticalDivider(width: 1, color: DesktopTokens.border),
+              Expanded(child: ClipRect(child: detail)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _RelayDeviceList extends StatelessWidget {
+  const _RelayDeviceList({required this.onSelect, required this.selectedKey});
+
+  final void Function(RelayDeviceSummary device)? onSelect;
+  final String? selectedKey;
 
   @override
   Widget build(BuildContext context) {
@@ -61,77 +154,96 @@ class RelayPage extends StatelessWidget {
             }),
           ];
 
-          return RefreshIndicator(
-            onRefresh: relayCubit.refreshHistory,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(24, 64, 24, 112),
-              children: [
-                Text(
-                  '伙伴设备',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.headlineMedium?.copyWith(fontSize: 28),
-                ),
-                const SizedBox(height: 24),
-                if (!relayCubit.hasRelayConfiguration)
-                  const _RelayNoticeCard(
-                    icon: Icons.info_outline_rounded,
-                    title: '当前服务器未声明 Relay 能力',
-                    message: '请先用已实现 Relay API 的 NASServer 版本登录，再进入联调。',
-                    backgroundColor: Color(0xFFFFF5E5),
-                    foregroundColor: Color(0xFF8A5A00),
-                  )
-                else if (!relayCubit.isRelayEnabled)
-                  const _RelayNoticeCard(
-                    icon: Icons.science_outlined,
-                    title: 'Relay 仍处于联调阶段',
-                    message: '服务端当前仍将 relay.enabled 标记为 false，这里保留调试入口，方便直接联调。',
-                    backgroundColor: Color(0xFFEAF2FF),
-                    foregroundColor: Color(0xFF375B9E),
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DesktopPageHeader(
+                title: '设备',
+                actions: [
+                  ToolbarIconButton(
+                    icon: Icons.refresh_rounded,
+                    tooltip: '刷新',
+                    onPressed: relayCubit.refreshHistory,
                   ),
-                if (state.errorMessage != null &&
-                    state.errorMessage!.trim().isNotEmpty)
-                  _RelayNoticeCard(
-                    icon: Icons.error_outline_rounded,
-                    title: 'Relay 历史加载失败',
-                    message: state.errorMessage!,
-                    backgroundColor: const Color(0xFFFFE9E9),
-                    foregroundColor: const Color(0xFFB64848),
+                ],
+              ),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(
+                    DesktopTokens.pagePadding,
+                    4,
+                    DesktopTokens.pagePadding,
+                    24,
                   ),
-                RelayRecordList(
-                  devices: summaries,
-                  onTap: (device) {
-                    if (device.isServer) {
-                      final transferCubit = context.read<TransferCubit>();
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => BlocProvider<TransferCubit>.value(
-                            value: transferCubit,
-                            child: const ServerTransferChatPage(),
-                          ),
-                        ),
-                      );
-                      return;
-                    }
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => BlocProvider.value(
-                          value: relayCubit,
-                          child: DeviceChatPage(peerClientId: device.clientId),
-                        ),
+                  children: [
+                    if (!relayCubit.hasRelayConfiguration)
+                      const _RelayNoticeCard(
+                        icon: Icons.info_outline_rounded,
+                        title: '当前服务器未声明 Relay 能力',
+                        message: '请先用已实现 Relay API 的 NASServer 版本登录，再进入联调。',
+                        backgroundColor: Color(0xFFFFF5E5),
+                        foregroundColor: Color(0xFF8A5A00),
+                      )
+                    else if (!relayCubit.isRelayEnabled)
+                      const _RelayNoticeCard(
+                        icon: Icons.science_outlined,
+                        title: 'Relay 仍处于联调阶段',
+                        message:
+                            '服务端当前仍将 relay.enabled 标记为 false，这里保留调试入口，方便直接联调。',
+                        backgroundColor: Color(0xFFEAF2FF),
+                        foregroundColor: Color(0xFF375B9E),
                       ),
-                    );
-                  },
+                    if (state.errorMessage != null &&
+                        state.errorMessage!.trim().isNotEmpty)
+                      _RelayNoticeCard(
+                        icon: Icons.error_outline_rounded,
+                        title: 'Relay 历史加载失败',
+                        message: state.errorMessage!,
+                        backgroundColor: const Color(0xFFFFE9E9),
+                        foregroundColor: const Color(0xFFB64848),
+                      ),
+                    RelayRecordList(
+                      devices: summaries,
+                      onTap: (device) {
+                        if (onSelect != null) {
+                          onSelect!(device);
+                          return;
+                        }
+                        if (device.isServer) {
+                          final transferCubit = context.read<TransferCubit>();
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => BlocProvider<TransferCubit>.value(
+                                value: transferCubit,
+                                child: const ServerTransferChatPage(),
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => BlocProvider.value(
+                              value: relayCubit,
+                              child: DeviceChatPage(
+                                peerClientId: device.clientId,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    if (state.isLoading &&
+                        !relayCubit.hasPeers &&
+                        !state.hasTransfers)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 24),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                  ],
                 ),
-                if (state.isLoading &&
-                    !relayCubit.hasPeers &&
-                    !state.hasTransfers)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 24),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-              ],
-            ),
+              ),
+            ],
           );
         },
       ),

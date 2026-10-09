@@ -30,6 +30,9 @@ import '../../../relay/presentation/pages/relay_page.dart';
 import '../../../settings/presentation/pages/settings_page.dart';
 import '../../../transfer/presentation/cubit/transfer_cubit.dart';
 import '../../../transfer/presentation/cubit/transfer_state.dart';
+import '../../../transfer/presentation/widgets/desktop_transfer_panel.dart';
+import '../../../../core/desktop/desktop_ui.dart';
+import '../widgets/desktop_sidebar.dart';
 
 class HomeShellPage extends StatefulWidget {
   final bool shouldRestoreSession;
@@ -125,17 +128,6 @@ class _HomeShellPageState extends State<HomeShellPage>
     if (state == AppLifecycleState.resumed) {
       unawaited(_realtimeSessionService?.handleForegroundResume());
     }
-  }
-
-  @override
-  void didChangeMetrics() {
-    // 系统栏高度变化时（immersiveSticky 切换、横竖屏、手势栏显示/隐藏）触发重建，
-    // 确保底部导航栏重新读取最新的 MediaQuery.padding.bottom，避免位置不同步。
-    // MediaQuery 变化本会自动重建依赖它的 widget，此处作为保险，覆盖极端时序。
-    if (!mounted) {
-      return;
-    }
-    setState(() {});
   }
 
   Future<void> _restoreStartupSession() async {
@@ -426,10 +418,9 @@ class _HomeShellPageState extends State<HomeShellPage>
     }
     final identityService = serviceLocator.clientIdentityService;
     final sessionDeviceId = serviceLocator.currentSession.deviceId?.trim();
-    final deviceId =
-        sessionDeviceId != null && sessionDeviceId.isNotEmpty
-            ? sessionDeviceId
-            : await identityService.getDeviceId();
+    final deviceId = sessionDeviceId != null && sessionDeviceId.isNotEmpty
+        ? sessionDeviceId
+        : await identityService.getDeviceId();
     final deviceDetails = await identityService.getDeviceDetails();
     nodeStore.applyLocalClientIdentity(
       deviceId: deviceId,
@@ -481,6 +472,20 @@ class _HomeShellPageState extends State<HomeShellPage>
     if (_relayHistoryLoaded) {
       await _relayCubit?.refreshHistory();
     }
+  }
+
+  String _loginLocation() {
+    final currentServer = serviceLocator.unifiedNodeStore.currentServer;
+    final queryParameters = <String, String>{
+      if ((currentServer?.network.connectBaseUrl ?? '').isNotEmpty)
+        'serverUrl': currentServer!.network.connectBaseUrl!,
+      if ((currentServer?.identity.displayName ?? '').isNotEmpty)
+        'serverName': currentServer!.identity.displayName,
+    };
+    return Uri(
+      path: RouteNames.login,
+      queryParameters: queryParameters.isEmpty ? null : queryParameters,
+    ).toString();
   }
 
   Future<void> _retryOfflineAccess() async {
@@ -589,7 +594,8 @@ class _HomeShellPageState extends State<HomeShellPage>
     }
 
     final targets = rawTransfer['targets'];
-    final isReceiver = targets is List &&
+    final isReceiver =
+        targets is List &&
         targets.any((target) {
           if (target is! Map) {
             return false;
@@ -669,25 +675,108 @@ class _HomeShellPageState extends State<HomeShellPage>
             },
             child: Stack(
               children: [
-                Scaffold(
-                  extendBody: true,
-                  body: IndexedStack(
-                    index: _selectedIndex,
-                    children: [
-                      const DashboardPage(),
-                      const FileBrowserPage(bottomPadding: 126),
-                      const RelayPage(),
-                      const SettingsPage(),
-                    ],
-                  ),
-                  bottomNavigationBar: BlocBuilder<RelayCubit, RelayState>(
-                    builder: (context, relayState) {
-                      return _BottomNavigationBar(
-                        selectedIndex: _selectedIndex,
-                        deviceTabUnread: relayState.totalUnread,
-                        onSelect: _onSelectTab,
-                      );
-                    },
+                CallbackShortcuts(
+                  bindings: {
+                    const SingleActivator(
+                      LogicalKeyboardKey.digit1,
+                      control: true,
+                    ): () =>
+                        _onSelectTab(0),
+                    const SingleActivator(
+                      LogicalKeyboardKey.digit2,
+                      control: true,
+                    ): () =>
+                        _onSelectTab(1),
+                    const SingleActivator(
+                      LogicalKeyboardKey.digit3,
+                      control: true,
+                    ): () =>
+                        _onSelectTab(2),
+                    const SingleActivator(
+                      LogicalKeyboardKey.digit4,
+                      control: true,
+                    ): () =>
+                        _onSelectTab(3),
+                    const SingleActivator(
+                      LogicalKeyboardKey.keyJ,
+                      control: true,
+                    ): DesktopShellState.toggleTransferPanel,
+                  },
+                  child: Scaffold(
+                    backgroundColor: DesktopTokens.background,
+                    body: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        BlocBuilder<RelayCubit, RelayState>(
+                          builder: (context, relayState) {
+                            return DesktopSidebar(
+                              selectedIndex: _selectedIndex,
+                              deviceTabUnread: relayState.totalUnread,
+                              onSelect: _onSelectTab,
+                              onReconnect: _retryOfflineAccess,
+                              onSwitchServer: () =>
+                                  context.go(RouteNames.serverList),
+                              onSignOut: () => context.go(_loginLocation()),
+                            );
+                          },
+                        ),
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final pages = IndexedStack(
+                                index: _selectedIndex,
+                                children: const [
+                                  DashboardPage(),
+                                  FileBrowserPage(),
+                                  RelayPage(),
+                                  SettingsPage(),
+                                ],
+                              );
+                              // 宽窗口：传输面板并排显示；窄窗口：浮在内容右侧，不挤压文件区。
+                              final docked = constraints.maxWidth >= 1100;
+                              return ValueListenableBuilder<bool>(
+                                valueListenable:
+                                    DesktopShellState.transferPanelOpen,
+                                builder: (context, open, _) {
+                                  final panel = DesktopTransferPanel(
+                                    onClose: () =>
+                                        DesktopShellState
+                                                .transferPanelOpen
+                                                .value =
+                                            false,
+                                  );
+                                  if (!open) return pages;
+                                  if (docked) {
+                                    return Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        Expanded(child: pages),
+                                        panel,
+                                      ],
+                                    );
+                                  }
+                                  return Stack(
+                                    children: [
+                                      Positioned.fill(child: pages),
+                                      Positioned(
+                                        top: 0,
+                                        right: 0,
+                                        bottom: 0,
+                                        child: Material(
+                                          elevation: 12,
+                                          child: panel,
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 OfflineResourceGate(
@@ -697,133 +786,6 @@ class _HomeShellPageState extends State<HomeShellPage>
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _BottomNavigationBar extends StatelessWidget {
-  final int selectedIndex;
-  final int deviceTabUnread;
-  final ValueChanged<int> onSelect;
-
-  const _BottomNavigationBar({
-    required this.selectedIndex,
-    required this.deviceTabUnread,
-    required this.onSelect,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // 弹性底部安全区：跟随系统导航栏/手势栏高度自适应（红米K60 等大手势栏设备、
-    // immersiveSticky 切换、横竖屏变化都能自动调整），内容始终在安全区上方显示完全。
-    final double bottomInset = MediaQuery.paddingOf(context).bottom;
-    return Container(
-      height: 72 + bottomInset,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 16,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
-      padding: EdgeInsets.fromLTRB(16, 10, 16, 10 + bottomInset),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _NavigationItem(
-            icon: Icons.dns_outlined,
-            label: '概览',
-            selected: selectedIndex == 0,
-            onTap: () => onSelect(0),
-          ),
-          _NavigationItem(
-            icon: Icons.inventory_2_outlined,
-            label: '文件',
-            selected: selectedIndex == 1,
-            onTap: () => onSelect(1),
-          ),
-          _NavigationItem(
-            icon: Icons.devices_outlined,
-            label: '设备',
-            selected: selectedIndex == 2,
-            badgeCount: deviceTabUnread,
-            onTap: () => onSelect(2),
-          ),
-          _NavigationItem(
-            icon: Icons.settings_outlined,
-            label: '设置',
-            selected: selectedIndex == 3,
-            onTap: () => onSelect(3),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NavigationItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final int badgeCount;
-  final VoidCallback onTap;
-
-  const _NavigationItem({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    this.badgeCount = 0,
-    required this.onTap,
-  });
-
-  String get _badgeLabel {
-    if (badgeCount <= 0) {
-      return '';
-    }
-    if (badgeCount > 99) {
-      return '99+';
-    }
-    return '$badgeCount';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = selected
-        ? theme.colorScheme.primary
-        : theme.textTheme.bodySmall?.color ?? const Color(0xFF9C9B99);
-    final iconWidget = Icon(icon, color: color, size: 23);
-    final badgeLabel = _badgeLabel;
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(18),
-      onTap: onTap,
-      child: SizedBox(
-        width: 64,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            badgeLabel.isEmpty
-                ? iconWidget
-                : Badge(
-                    label: Text(badgeLabel),
-                    isLabelVisible: true,
-                    child: iconWidget,
-                  ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: color,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ],
         ),
       ),
     );

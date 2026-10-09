@@ -1,6 +1,8 @@
 /// 文件输入：SharedPreferences
 /// 文件职责：Windows 桌面端偏好设置（关闭窗口最小化到托盘、开机自启、自启时隐藏窗口）
 /// 文件对外接口：DesktopSettingsStore、DesktopSettings
+import 'dart:ui' show Rect;
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -61,5 +63,34 @@ class DesktopSettingsStore {
     await _prefs.setBool(_keyLaunchAtStartup, next.launchAtStartup);
     await _prefs.setBool(_keyLaunchMinimized, next.launchMinimized);
     settings.value = next;
+  }
+
+  static const String _keyWindowBounds = 'desktop_window_bounds';
+  static const String _keyWindowMaximized = 'desktop_window_maximized';
+
+  /// 上次关闭时的窗口位置与大小（逻辑像素），没有记录时返回 null。
+  Rect? get windowBounds {
+    final raw = _prefs.getStringList(_keyWindowBounds);
+    if (raw == null || raw.length != 4) return null;
+    final values = raw.map(double.tryParse).toList();
+    if (values.any((v) => v == null)) return null;
+    final rect = Rect.fromLTWH(values[0]!, values[1]!, values[2]!, values[3]!);
+    if (rect.width < 200 || rect.height < 200) return null;
+    return rect;
+  }
+
+  bool get windowMaximized => _prefs.getBool(_keyWindowMaximized) ?? false;
+
+  Future<void> saveWindowBounds(Rect bounds) async {
+    await _prefs.setStringList(_keyWindowBounds, [
+      bounds.left.toStringAsFixed(0),
+      bounds.top.toStringAsFixed(0),
+      bounds.width.toStringAsFixed(0),
+      bounds.height.toStringAsFixed(0),
+    ]);
+  }
+
+  Future<void> saveWindowMaximized(bool maximized) async {
+    await _prefs.setBool(_keyWindowMaximized, maximized);
   }
 }

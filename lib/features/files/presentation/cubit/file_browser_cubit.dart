@@ -61,8 +61,10 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
 
   String _currentRootId = 'fs';
   FileCategory _currentCategory = FileCategory.photo;
+
   /// 当前排序字段：'modified'（默认） | 'size'
   String _currentSortBy = 'modified';
+
   /// 当前排序方向：'desc'（默认） | 'asc'
   String _currentSortOrder = 'desc';
   Timer? _thumbnailLoadTimer;
@@ -303,6 +305,23 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
         currentState.copyWith(selectionMode: true, selectedPaths: newSelected),
       );
     }
+  }
+
+  /// 桌面端：用给定集合整体替换当前选择（单击、Ctrl/Shift 多选、框选、全选）。
+  void setSelection(Set<String> paths) {
+    final currentState = state;
+    if (currentState is! FileBrowserLoaded) {
+      return;
+    }
+    if (setEquals(currentState.selectedPaths, paths)) {
+      return;
+    }
+    emit(
+      currentState.copyWith(
+        selectionMode: paths.isNotEmpty,
+        selectedPaths: Set<String>.unmodifiable(paths),
+      ),
+    );
   }
 
   void exitSelectionMode() {
@@ -774,10 +793,7 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
     );
   }
 
-  void _removeEntriesLocally(
-    FileBrowserLoaded state,
-    Set<String> filePaths,
-  ) {
+  void _removeEntriesLocally(FileBrowserLoaded state, Set<String> filePaths) {
     if (filePaths.isEmpty) {
       return;
     }
@@ -823,7 +839,9 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
   }
 
   void _evictThumbnail(String filePath) {
-    _getCachedThumbnailUseCase.evictThumbnail(_buildRemoteResourcePath(filePath));
+    _getCachedThumbnailUseCase.evictThumbnail(
+      _buildRemoteResourcePath(filePath),
+    );
   }
 
   List<FileEntryEntity> _buildMediaFiles(List<FileEntryEntity> files) {
