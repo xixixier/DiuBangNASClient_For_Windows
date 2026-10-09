@@ -1,4 +1,4 @@
-; 铥棒文件 Windows 客户端安装包脚本（Inno Setup 6）
+﻿; 铥棒文件 Windows 客户端安装包脚本（Inno Setup 6）
 ; 先执行 flutter build windows --release 并部署 MSVC 运行库，再用 ISCC 编译本脚本。
 
 #ifndef MyAppVersion
@@ -35,7 +35,7 @@ SetupIconFile=..\..\windows\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标:"
