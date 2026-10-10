@@ -513,14 +513,16 @@ class DesktopSegmented<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
     return Container(
-      height: 34,
+      height: 36,
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: const Color(0xFFEAE8E3),
-        borderRadius: BorderRadius.circular(9),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
+        // 让选中的白色胶囊撑满整个高度（只留 3px 内边距），而不是只包住文字
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (final segment in segments)
             _SegmentButton(
@@ -554,31 +556,46 @@ class _SegmentButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? primary : DesktopTokens.textSecondary;
-    return Material(
-      color: selected ? Colors.white : Colors.transparent,
-      borderRadius: BorderRadius.circular(7),
-      elevation: selected ? 0.5 : 0,
-      child: InkWell(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 120),
+      decoration: BoxDecoration(
+        color: selected ? Colors.white : Colors.transparent,
         borderRadius: BorderRadius.circular(7),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (icon != null) ...[
-                Icon(icon, size: 16, color: color),
-                const SizedBox(width: 6),
-              ],
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                  color: color,
+        boxShadow: selected
+            ? const [
+                BoxShadow(
+                  color: Color(0x1F000000),
+                  blurRadius: 2,
+                  offset: Offset(0, 1),
                 ),
-              ),
-            ],
+              ]
+            : null,
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(7),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 16, color: color),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

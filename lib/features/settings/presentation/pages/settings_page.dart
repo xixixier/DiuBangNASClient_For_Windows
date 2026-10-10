@@ -11,6 +11,7 @@ import '../../../../app/di/service_locator.dart';
 import '../../../../core/desktop/desktop_runtime_controller.dart';
 import '../../../../core/desktop/desktop_settings_store.dart';
 import '../../../../core/desktop/desktop_ui.dart';
+import '../../../../core/platform/app_platform.dart';
 import '../../../../core/device/client_identity_service.dart';
 import '../../../../core/device/local_media_picker.dart';
 import '../../../../core/node/device_alias_constraints.dart';
@@ -393,7 +394,13 @@ class _DeviceIdentitySettingsTileState
     }
   }
 
+  final GlobalKey _tileKey = GlobalKey();
+
   Future<void> _showIdentityOptions() async {
+    if (AppPlatform.isWindows) {
+      await _showDesktopIdentityMenu();
+      return;
+    }
     await showModalBottomSheet<void>(
       context: context,
       builder: (context) {
@@ -434,9 +441,56 @@ class _DeviceIdentitySettingsTileState
     );
   }
 
+  /// Windows：在卡片右下方弹出与文件页右键菜单一致的下拉菜单，而不是底部弹窗。
+  Future<void> _showDesktopIdentityMenu() async {
+    final tileBox = _tileKey.currentContext?.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (tileBox == null || overlay == null) return;
+    final anchor = tileBox.localToGlobal(
+      Offset(tileBox.size.width - 240, tileBox.size.height + 4),
+      ancestor: overlay,
+    );
+
+    PopupMenuItem<VoidCallback> item(
+      String label,
+      IconData icon,
+      VoidCallback onTap,
+    ) {
+      return PopupMenuItem<VoidCallback>(
+        value: onTap,
+        height: 38,
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: DesktopTokens.textPrimary),
+            const SizedBox(width: 12),
+            Text(label, style: const TextStyle(fontSize: 13)),
+          ],
+        ),
+      );
+    }
+
+    final selected = await showMenu<VoidCallback>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(anchor.dx, anchor.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      constraints: const BoxConstraints(minWidth: 240),
+      items: [
+        item('设置头像…', Icons.photo_library_outlined, _pickAvatar),
+        item('设置名称…', Icons.drive_file_rename_outline, _editDisplayAlias),
+        if (_avatarPath != null)
+          item('恢复默认头像', Icons.restore_outlined, _clearAvatar),
+      ],
+    );
+    selected?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     return _SettingsEntryTile(
+      key: _tileKey,
       icon: Icons.badge_outlined,
       title: '设备身份',
       subtitle: _resolvedDisplayName,
@@ -509,6 +563,7 @@ class _SettingsEntryTile extends StatelessWidget {
   final VoidCallback onTap;
 
   const _SettingsEntryTile({
+    super.key,
     this.icon,
     this.leading,
     required this.title,

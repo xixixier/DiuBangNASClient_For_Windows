@@ -718,7 +718,9 @@ class _BackupPageState extends State<BackupPage> {
   }
 
   /// Windows：管理备份文件夹，并选择“立即备份 / 定时备份”。
-  Future<void> _showWindowsBackupFoldersDialog({bool scheduledOnly = false}) async {
+  Future<void> _showWindowsBackupFoldersDialog({
+    bool scheduledOnly = false,
+  }) async {
     final action = await showDialog<_BackupGalleryAction>(
       context: context,
       builder: (dialogContext) => _WindowsBackupFoldersDialog(
@@ -1164,8 +1166,7 @@ class _BackupPageState extends State<BackupPage> {
                               const SizedBox(height: 12),
                               _ScheduledBackupStopBanner(
                                 run: _activeScheduledRun!,
-                                planName:
-                                    _dailyPlan?.name ?? _defaultPlanName,
+                                planName: _dailyPlan?.name ?? _defaultPlanName,
                                 isStopping: _isStoppingScheduledRun,
                                 onStop: _stopScheduledBackup,
                               ),
@@ -1277,9 +1278,8 @@ class _BackupPageState extends State<BackupPage> {
                     _PreparationOverlay(
                       state: state,
                       onStop: state.isBackupStoppable
-                          ? () => context
-                                .read<BackupCubit>()
-                                .stopCurrentBackup()
+                          ? () =>
+                                context.read<BackupCubit>().stopCurrentBackup()
                           : null,
                     ),
                   if (!state.isBusyPreparing &&
@@ -1289,9 +1289,8 @@ class _BackupPageState extends State<BackupPage> {
                       state: state,
                       formatSize: _formatSize,
                       onStop: state.isBackupStoppable
-                          ? () => context
-                                .read<BackupCubit>()
-                                .stopCurrentBackup()
+                          ? () =>
+                                context.read<BackupCubit>().stopCurrentBackup()
                           : null,
                     ),
                 ],
@@ -1523,7 +1522,9 @@ class _FloatingBatchStatusBar extends StatelessWidget {
                             ? const SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Icon(
                                 Icons.stop_circle_outlined,
@@ -1621,9 +1622,7 @@ class _ScheduledBackupStopBanner extends StatelessWidget {
                     )
                   : const Icon(Icons.stop_circle_outlined),
               label: Text(
-                isStopping || run.status == 'stopping'
-                    ? '正在停止本次备份'
-                    : '停止本次备份',
+                isStopping || run.status == 'stopping' ? '正在停止本次备份' : '停止本次备份',
               ),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFFC53030),
@@ -2633,13 +2632,32 @@ class _ScheduledPlanDialogState extends State<_ScheduledPlanDialog> {
   }
 
   Future<void> _pickTime() async {
-    final result = await showModalBottomSheet<_WheelTimeResult>(
-      context: context,
-      builder: (context) => _WheelTimePicker(
-        initialHour: _time.hour,
-        initialMinute: _time.minute,
-      ),
+    final picker = _WheelTimePicker(
+      initialHour: _time.hour,
+      initialMinute: _time.minute,
     );
+    // Windows：居中对话框，避免手机式底部弹窗横跨整个窗口底部
+    final result = AppPlatform.isWindows
+        ? await showDialog<_WheelTimeResult>(
+            context: context,
+            builder: (context) => Dialog(
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: picker,
+                ),
+              ),
+            ),
+          )
+        : await showModalBottomSheet<_WheelTimeResult>(
+            context: context,
+            builder: (context) => picker,
+          );
     if (result == null || !mounted) {
       return;
     }
@@ -3325,9 +3343,7 @@ class _BatteryOptimizationHintState extends State<_BatteryOptimizationHint> {
       }
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(content: Text(error.message ?? '无法打开自启动设置页面')),
-        );
+        ..showSnackBar(SnackBar(content: Text(error.message ?? '无法打开自启动设置页面')));
     }
   }
 
@@ -3608,9 +3624,9 @@ class _BatchProgressCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
               if (onStop != null && state.isBatchRunning)
@@ -3831,8 +3847,7 @@ class _WarningCard extends StatelessWidget {
   }
 }
 
-String get _defaultPlanName =>
-    AppPlatform.isWindows ? '定时文件夹自动备份' : '定时图库自动备份';
+String get _defaultPlanName => AppPlatform.isWindows ? '定时文件夹自动备份' : '定时图库自动备份';
 
 /// Windows：定时备份运行条件提示（替代 Android 的电池优化/自启动提示）。
 class _DesktopScheduleHint extends StatelessWidget {
