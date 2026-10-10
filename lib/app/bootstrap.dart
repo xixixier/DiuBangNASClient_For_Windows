@@ -4,6 +4,7 @@
 /// 文件对外接口：bootstrap
 import 'dart:async';
 
+import '../features/transfer/presentation/cubit/transfer_state.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
@@ -51,6 +52,10 @@ Future<void> bootstrap({List<String> startupArgs = const <String>[]}) async {
 
 Future<void> _initializeDeferredStartupTasks() async {
   if (AppPlatform.isWindows) {
+    DesktopRuntimeController.instance.activeTransferCount = () {
+      final state = serviceLocator.transferCubit.state;
+      return state is TransferLoaded ? state.activeCount : 0;
+    };
     final bridge = serviceLocator.windowsBackupBridge;
     await bridge.start();
     DesktopRuntimeController.instance.attachBackgroundStatus(

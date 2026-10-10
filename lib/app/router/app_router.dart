@@ -2,6 +2,7 @@
 /// 文件职责：集中定义页面路由表和跳转规则
 /// 文件对外接口：buildAppRouter
 import 'package:go_router/go_router.dart';
+import '../../core/desktop/desktop_runtime_controller.dart';
 import 'route_names.dart';
 import '../../app/di/service_locator.dart';
 import '../../features/startup/presentation/pages/splash_page.dart';
@@ -12,12 +13,15 @@ import '../../features/startup/application/use_cases/resolve_start_route_use_cas
 
 GoRouter buildAppRouter({ResolveStartRouteUseCase? resolveStartRouteUseCase}) {
   return GoRouter(
+    navigatorKey: DesktopRuntimeController.instance.navigatorKey,
     initialLocation: RouteNames.splash,
     routes: [
       GoRoute(
         path: RouteNames.splash,
         builder: (context, state) => SplashPage(
-          resolveStartRouteUseCase: resolveStartRouteUseCase ?? serviceLocator.resolveStartRouteUseCase,
+          resolveStartRouteUseCase:
+              resolveStartRouteUseCase ??
+              serviceLocator.resolveStartRouteUseCase,
         ),
       ),
       GoRoute(

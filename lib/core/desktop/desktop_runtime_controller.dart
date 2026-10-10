@@ -41,6 +41,13 @@ class DesktopRuntimeController with WindowListener {
   bool _windowPresented = false;
   bool _isExiting = false;
   bool _isHidingWindow = false;
+  bool _isConfirmingExit = false;
+
+  /// 根 Navigator，用于在退出前弹确认框（由 GoRouter 使用）。
+  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+  /// 返回尚未完成的传输数量（进行中 / 排队 / 等待处理冲突）。
+  int Function()? activeTransferCount;
 
   static bool get isSupported => Platform.isWindows;
 
@@ -200,6 +207,9 @@ class DesktopRuntimeController with WindowListener {
     if (!isSupported || _isExiting) {
       return;
     }
+    if (!await _confirmExitIfBusy()) {
+      return;
+    }
     _isExiting = true;
     _windowManager.removeListener(this);
     try {
@@ -221,6 +231,50 @@ class DesktopRuntimeController with WindowListener {
       debugPrint('[Desktop] exit cleanup failed: $error');
     } finally {
       exit(0);
+    }
+  }
+
+  /// 有未完成的传输时先确认；返回 true 表示继续退出。
+  Future<bool> _confirmExitIfBusy() async {
+    if (_isConfirmingExit) return false;
+    int count = 0;
+    try {
+      count = activeTransferCount?.call() ?? 0;
+    } catch (_) {}
+    if (count <= 0) return true;
+    final context = navigatorKey.currentContext;
+    if (context == null) return true;
+
+    _isConfirmingExit = true;
+    try {
+      // 从托盘菜单退出时窗口可能是隐藏的，先显示出来再弹框
+      if (!await _windowManager.isVisible()) {
+        await showWindow();
+      }
+      if (!context.mounted) return true;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('还有传输未完成'),
+          content: Text('当前有 $count 个上传或下载任务还没完成，退出后会被中断。确定要退出吗？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB64848),
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('仍然退出'),
+            ),
+          ],
+        ),
+      );
+      return confirmed == true;
+    } finally {
+      _isConfirmingExit = false;
     }
   }
 
