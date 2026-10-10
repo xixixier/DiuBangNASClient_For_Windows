@@ -4,6 +4,13 @@
 import '../../core/platform/app_platform.dart';
 import 'package:flutter/material.dart';
 
+const String _windowsFontFamily = 'Microsoft YaHei UI';
+const List<String> _windowsFontFallback = <String>[
+  'Microsoft YaHei',
+  'Segoe UI',
+  'SimHei',
+];
+
 ThemeData buildAppTheme() {
   const scaffoldColor = Color(0xFFF5F4F1);
   const surfaceColor = Colors.white;
@@ -34,10 +41,8 @@ ThemeData buildAppTheme() {
     colorScheme: colorScheme,
     scaffoldBackgroundColor: scaffoldColor,
     // Windows：中文优先使用系统“微软雅黑”，避免回退到日文字形
-    fontFamily: AppPlatform.isWindows ? 'Microsoft YaHei UI' : null,
-    fontFamilyFallback: AppPlatform.isWindows
-        ? const <String>['Microsoft YaHei', 'Segoe UI', 'SimHei']
-        : null,
+    fontFamily: AppPlatform.isWindows ? _windowsFontFamily : null,
+    fontFamilyFallback: AppPlatform.isWindows ? _windowsFontFallback : null,
     visualDensity: AppPlatform.isWindows ? VisualDensity.standard : null,
   );
 
@@ -77,20 +82,42 @@ ThemeData buildAppTheme() {
     ),
   );
 
+  // 自定义 TextStyle 不会自动带上 ThemeData.fontFamily，必须显式补上，
+  // 否则 Windows 上中文会逐字回退到不同字体（字重、字形参差不齐）。
+  TextStyle f(TextStyle style) => AppPlatform.isWindows
+      ? style.copyWith(
+          fontFamily: _windowsFontFamily,
+          fontFamilyFallback: _windowsFontFallback,
+        )
+      : style;
+
   return baseTheme.copyWith(
-    textTheme: textTheme,
-    appBarTheme: const AppBarTheme(
+    textTheme: AppPlatform.isWindows
+        ? textTheme.apply(
+            fontFamily: _windowsFontFamily,
+            fontFamilyFallback: _windowsFontFallback,
+          )
+        : textTheme,
+    primaryTextTheme: AppPlatform.isWindows
+        ? baseTheme.primaryTextTheme.apply(
+            fontFamily: _windowsFontFamily,
+            fontFamilyFallback: _windowsFontFallback,
+          )
+        : baseTheme.primaryTextTheme,
+    appBarTheme: AppBarTheme(
       backgroundColor: scaffoldColor,
       foregroundColor: textColor,
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: true,
       surfaceTintColor: Colors.transparent,
-      titleTextStyle: TextStyle(
-        color: textColor,
-        fontSize: 18,
-        fontWeight: FontWeight.w600,
-        letterSpacing: -0.2,
+      titleTextStyle: f(
+        const TextStyle(
+          color: textColor,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.2,
+        ),
       ),
     ),
     cardTheme: CardThemeData(
@@ -104,15 +131,19 @@ ThemeData buildAppTheme() {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: surfaceColor,
-      hintStyle: const TextStyle(
-        color: mutedTextColor,
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
+      hintStyle: f(
+        const TextStyle(
+          color: mutedTextColor,
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+        ),
       ),
-      labelStyle: const TextStyle(
-        color: mutedTextColor,
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
+      labelStyle: f(
+        const TextStyle(
+          color: mutedTextColor,
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+        ),
       ),
       prefixIconColor: mutedTextColor,
       suffixIconColor: mutedTextColor,
@@ -148,10 +179,12 @@ ThemeData buildAppTheme() {
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         elevation: 0,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        textStyle: const TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-          letterSpacing: -0.2,
+        textStyle: f(
+          const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.2,
+          ),
         ),
       ),
     ),
@@ -165,10 +198,12 @@ ThemeData buildAppTheme() {
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
       backgroundColor: textColor,
-      contentTextStyle: const TextStyle(
-        color: Colors.white,
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
+      contentTextStyle: f(
+        const TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+        ),
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     ),

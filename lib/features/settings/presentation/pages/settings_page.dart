@@ -158,7 +158,8 @@ class _DesktopSettingsSection extends StatelessWidget {
           required ValueChanged<bool>? onChanged,
         }) {
           return SwitchListTile(
-            secondary: Icon(icon, color: DesktopTokens.textSecondary),
+            contentPadding: const EdgeInsets.fromLTRB(16, 4, 12, 4),
+            secondary: Icon(icon, size: 20, color: DesktopTokens.textSecondary),
             title: Text(title, style: const TextStyle(fontSize: 14)),
             subtitle: Text(
               subtitle,
@@ -202,7 +203,7 @@ class _DesktopSettingsSection extends StatelessWidget {
                     onChanged: (v) =>
                         _apply(context, settings.copyWith(closeToTray: v)),
                   ),
-                  const Divider(height: 1, indent: 56),
+                  const Divider(height: 1, indent: 52, endIndent: 16),
                   tile(
                     icon: Icons.power_settings_new_rounded,
                     title: '开机自动启动',
@@ -211,7 +212,7 @@ class _DesktopSettingsSection extends StatelessWidget {
                     onChanged: (v) =>
                         _apply(context, settings.copyWith(launchAtStartup: v)),
                   ),
-                  const Divider(height: 1, indent: 56),
+                  const Divider(height: 1, indent: 52, endIndent: 16),
                   tile(
                     icon: Icons.visibility_off_outlined,
                     title: '自启时不显示窗口',

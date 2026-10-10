@@ -144,9 +144,9 @@ class WebdavFileProtocolClient
 
   String _buildUrl(NasPath path) {
     final baseUri = Uri.parse(baseUrl);
-    final prefixParts = _getRootPathPrefix(path.rootId)
-        .split('/')
-        .where((segment) => segment.isNotEmpty);
+    final prefixParts = _getRootPathPrefix(
+      path.rootId,
+    ).split('/').where((segment) => segment.isNotEmpty);
     final uri = Uri(
       scheme: baseUri.scheme,
       host: baseUri.host,
@@ -217,14 +217,18 @@ class WebdavFileProtocolClient
         r'<[a-zA-Z]*:?href[^>]*>(.*?)</[a-zA-Z]*:?href>',
         caseSensitive: false,
       ).firstMatch(responseBlock);
-      final href = hrefMatch?.group(1) ?? '';
+      final href = _unescapeXml(hrefMatch?.group(1) ?? '');
       if (href.isEmpty) continue;
 
       final displayMatch = RegExp(
         r'<[a-zA-Z]*:?displayname[^>]*>(.*?)</[a-zA-Z]*:?displayname>',
         caseSensitive: false,
       ).firstMatch(responseBlock);
-      final displayName = displayMatch?.group(1) ?? href.split('/').last;
+      // displayname 是 XML 文本，不是 URL 编码；只有从 href 回退时才需要百分号解码
+      final rawDisplayName = displayMatch?.group(1);
+      final displayName = rawDisplayName != null
+          ? _unescapeXml(rawDisplayName)
+          : _safeDecodeComponent(href.split('/').last);
 
       final typeMatch = RegExp(
         r'<[a-zA-Z]*:?resourcetype[^>]*>(.*?)</[a-zA-Z]*:?resourcetype>',
@@ -265,22 +269,15 @@ class WebdavFileProtocolClient
       final hasLeading = relativePath.startsWith('/');
       final decodedParts = <String>[];
       for (final p in relativePath.split('/').where((p) => p.isNotEmpty)) {
-        try {
-          decodedParts.add(Uri.decodeComponent(p));
-        } on FormatException {
-          decodedParts.add(p);
-        }
+        decodedParts.add(_safeDecodeComponent(p));
       }
       final decodedRelativePath = decodedParts.isEmpty
           ? (hasLeading ? '/' : '')
           : '/${decodedParts.join('/')}';
 
-      String decodedDisplayName;
-      try {
-        decodedDisplayName = Uri.decodeFull(displayName);
-      } on FormatException {
-        decodedDisplayName = displayName;
-      }
+      final decodedDisplayName = displayName.isNotEmpty
+          ? displayName
+          : (decodedParts.isNotEmpty ? decodedParts.last : displayName);
 
       entries.add(
         FileEntryEntity(
@@ -294,6 +291,45 @@ class WebdavFileProtocolClient
     }
 
     return entries;
+  }
+
+  /// 百分号解码；文件名里带有未编码的 `%`（例如 `100%.jpg`）时
+  /// Dart 会抛 ArgumentError 而不是 FormatException，这里两种都兜住，原样返回。
+  static String _safeDecodeComponent(String value) {
+    if (!value.contains('%')) return value;
+    try {
+      return Uri.decodeComponent(value);
+    } on FormatException {
+      return value;
+    } on ArgumentError {
+      return value;
+    }
+  }
+
+  static String _unescapeXml(String value) {
+    if (!value.contains('&')) return value;
+    return value.replaceAllMapped(
+      RegExp(r'&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);'),
+      (m) {
+        final entity = m.group(1)!;
+        switch (entity) {
+          case 'amp':
+            return '&';
+          case 'lt':
+            return '<';
+          case 'gt':
+            return '>';
+          case 'quot':
+            return '"';
+          case 'apos':
+            return "'";
+        }
+        final code = entity.startsWith('#x')
+            ? int.tryParse(entity.substring(2), radix: 16)
+            : int.tryParse(entity.substring(1));
+        return code == null ? m.group(0)! : String.fromCharCode(code);
+      },
+    );
   }
 
   DateTime _parseHttpDate(String date) {
