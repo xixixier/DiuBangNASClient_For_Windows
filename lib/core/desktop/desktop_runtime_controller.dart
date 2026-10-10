@@ -189,21 +189,52 @@ class DesktopRuntimeController with WindowListener {
     await _safeRefreshTray();
   }
 
+  /// 退出应用。
+  ///
+  /// 以前是 `windowManager.destroy()` 后让 Flutter 引擎自己收尾：引擎要等 Dart
+  /// 虚拟机里的 WebSocket、HTTP 长连接、后台 isolate、播放器线程等全部结束，
+  /// 点了 × 之后窗口会卡住好几秒才消失。现在先立刻隐藏窗口，做几件必要的
+  /// 收尾（保存窗口位置、移除托盘图标，均带超时），然后直接结束进程，
+  /// 剩下的资源交给操作系统回收。
   Future<void> exitApplication() async {
     if (!isSupported || _isExiting) {
       return;
     }
     _isExiting = true;
+    _windowManager.removeListener(this);
     try {
+      await _flushWindowBounds().timeout(
+        const Duration(milliseconds: 400),
+        onTimeout: () {},
+      );
+      await _windowManager.hide().timeout(
+        const Duration(milliseconds: 300),
+        onTimeout: () {},
+      );
       if (_trayReady) {
-        await _systemTray.destroy();
+        await _systemTray.destroy().timeout(
+          const Duration(milliseconds: 500),
+          onTimeout: () => false,
+        );
       }
-      _windowManager.removeListener(this);
-      await _windowManager.setPreventClose(false);
-      await _windowManager.destroy();
+    } catch (error) {
+      debugPrint('[Desktop] exit cleanup failed: $error');
     } finally {
-      _isExiting = false;
+      exit(0);
     }
+  }
+
+  Future<void> _flushWindowBounds() async {
+    _boundsSaveTimer?.cancel();
+    try {
+      if (await _windowManager.isMaximized() ||
+          await _windowManager.isMinimized() ||
+          !await _windowManager.isVisible()) {
+        return;
+      }
+      final bounds = await _windowManager.getBounds();
+      await _settingsStore?.saveWindowBounds(bounds);
+    } catch (_) {}
   }
 
   Timer? _boundsSaveTimer;
