@@ -119,6 +119,14 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
             );
           }
           emit(previousLoadedState.copyWith(message: failure.message));
+          // 切换根目录时缩略图缓存已被清空；回退到原来的列表后页面的
+          // 可见范围没变，不会再次请求，这里主动补一次，避免只剩占位图标。
+          _thumbnailBackoffAttempt = 0;
+          _thumbnailLoadTimer?.cancel();
+          _thumbnailLoadTimer = Timer(
+            _thumbnailRequestDebounce,
+            _loadNextBatch,
+          );
           return;
         }
         emit(FileBrowserError(failure.message));
