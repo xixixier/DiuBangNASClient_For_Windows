@@ -113,7 +113,9 @@ class TrustedServerStore {
     if (host == null) {
       return null;
     }
-    for (final record in _records) {
+    // 同一地址可能先后对应过不同的服务端（例如重装服务端后证书和 serverId 都变了），
+    // 以最近配对的记录为准，否则会用旧证书去握手导致连接失败。
+    for (final record in _records.reversed) {
       if (record.hosts.contains(host)) {
         return record;
       }
@@ -164,13 +166,22 @@ class TrustedServerStore {
       lastBaseUrl: baseUrl,
       hosts: normalizedHosts,
     );
-    if (existingIndex == -1) {
-      _records = [..._records, updatedRecord];
-    } else {
-      final next = [..._records];
-      next[existingIndex] = updatedRecord;
-      _records = next;
+    // 这个地址现在属于这台服务端：从其他记录里摘掉，没有地址的旧记录直接丢弃。
+    final others = <TrustedServerRecord>[];
+    for (var i = 0; i < _records.length; i++) {
+      if (i == existingIndex) continue;
+      final record = _records[i];
+      if (host == null || !record.hosts.contains(host)) {
+        others.add(record);
+        continue;
+      }
+      final remaining = record.hosts.where((h) => h != host).toList();
+      if (remaining.isNotEmpty) {
+        others.add(record.copyWith(hosts: remaining));
+      }
     }
+    // 最近配对的放在最后，findByServerUrl 从后往前找
+    _records = [...others, updatedRecord];
     await _persist();
   }
 
