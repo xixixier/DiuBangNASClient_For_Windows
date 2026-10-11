@@ -224,6 +224,13 @@ class _FakeFileProtocolClient implements FileProtocolClient {
     deletedPaths.add(path);
   }
 
+  final List<(NasPath, NasPath)> movedPaths = [];
+
+  @override
+  Future<void> move(NasPath from, NasPath to, {bool overwrite = false}) async {
+    movedPaths.add((from, to));
+  }
+
   @override
   Future<Stream<List<int>>> download({
     required NasPath sourcePath,

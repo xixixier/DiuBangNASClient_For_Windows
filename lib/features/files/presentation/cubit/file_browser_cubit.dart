@@ -16,6 +16,7 @@ import '../../application/use_cases/get_cached_thumbnail_use_case.dart';
 import '../../application/use_cases/is_root_writable_use_case.dart';
 import '../../application/use_cases/list_directory_use_case.dart';
 import '../../application/use_cases/load_visible_thumbnails_use_case.dart';
+import '../../application/use_cases/move_entry_use_case.dart';
 import '../../application/use_cases/switch_file_root_use_case.dart';
 import '../../domain/entities/batch_delete_result_entity.dart';
 import '../../domain/entities/file_category.dart';
@@ -34,7 +35,9 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
     required GetCachedThumbnailUseCase getCachedThumbnailUseCase,
     required SwitchFileRootUseCase switchFileRootUseCase,
     required IsRootWritableUseCase isRootWritableUseCase,
-  }) : _listDirectoryUseCase = listDirectoryUseCase,
+    MoveEntryUseCase? moveEntryUseCase,
+  }) : _moveEntryUseCase = moveEntryUseCase,
+       _listDirectoryUseCase = listDirectoryUseCase,
        _createFolderUseCase = createFolderUseCase,
        _deleteFileUseCase = deleteFileUseCase,
        _batchDeleteUseCase = batchDeleteUseCase,
@@ -58,9 +61,11 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
   final GetCachedThumbnailUseCase _getCachedThumbnailUseCase;
   final SwitchFileRootUseCase _switchFileRootUseCase;
   final IsRootWritableUseCase _isRootWritableUseCase;
+  final MoveEntryUseCase? _moveEntryUseCase;
 
   String _currentRootId = 'fs';
   FileCategory _currentCategory = FileCategory.photo;
+  bool _folderView = false;
 
   /// 当前排序字段：'modified'（默认） | 'size'
   String _currentSortBy = 'modified';
@@ -82,6 +87,8 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
 
   String get currentRootId => _currentRootId;
   FileCategory get currentCategory => _currentCategory;
+  bool get isFolderView => _folderView;
+  bool get canMoveEntries => _moveEntryUseCase != null;
   String get currentSortBy => _currentSortBy;
   String get currentSortOrder => _currentSortOrder;
 
@@ -191,13 +198,37 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
   }
 
   Future<void> switchCategory(FileCategory category) async {
-    if (_currentCategory == category) {
+    if (_currentCategory == category && !_folderView) {
       return;
     }
+    final leavingFolderView = _folderView;
     _currentCategory = category;
+    _folderView = false;
     final currentState = state;
     if (currentState is FileBrowserLoaded) {
-      await loadDirectory(currentState.currentPath);
+      if (leavingFolderView) {
+        _resetThumbnailWindow();
+      }
+      // 分类视图由服务端索引平铺列出全部文件（含子文件夹里的），始终从根目录查询
+      await loadDirectory(NasPath.root(currentState.currentRootId));
+    }
+  }
+
+  /// 切换到文件夹视图：从根目录开始逐级浏览。
+  Future<void> switchToFolderView() async {
+    if (_folderView) return;
+    _folderView = true;
+    final currentState = state;
+    if (currentState is FileBrowserLoaded) {
+      _resetThumbnailWindow();
+      await loadDirectory(NasPath.root(currentState.currentRootId));
+    }
+  }
+
+  Future<void> navigateTo(NasPath path) async {
+    final currentState = state;
+    if (currentState is FileBrowserLoaded && currentState.currentPath != path) {
+      await loadDirectory(path);
     }
   }
 
@@ -218,6 +249,9 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
   }
 
   List<FileEntryEntity> _filterFiles(List<FileEntryEntity> files) {
+    if (_folderView) {
+      return List<FileEntryEntity>.unmodifiable(files);
+    }
     return files
         .where((file) {
           if (file.isDirectory) {
@@ -246,17 +280,119 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
     }
   }
 
-  Future<void> createFolder(String name) async {
+  /// 在当前目录新建文件夹；返回 null 表示成功，否则为错误提示。
+  Future<String?> createFolder(String name) async {
     final currentState = state;
-    if (currentState is FileBrowserLoaded) {
-      final newPath = currentState.currentPath.append(name);
-      final result = await _createFolderUseCase.call(newPath);
-      result.when(
-        success: (_) => _appendFolderLocally(currentState, name),
-        failure: (failure) =>
-            emit(currentState.copyWith(message: failure.message)),
-      );
+    if (currentState is! FileBrowserLoaded) return '页面尚未加载';
+    final newPath = currentState.currentPath.append(name);
+    final result = await _createFolderUseCase.call(newPath);
+    if (result.isFailure) {
+      return humanizeFolderError(result.failureOrNull!.message);
     }
+    if (_folderView) {
+      await refreshDirectoryEntries(currentState.currentPath);
+    } else {
+      _appendFolderLocally(currentState, name);
+    }
+    return null;
+  }
+
+  /// 重命名文件或文件夹；返回 null 表示成功，否则为错误提示。
+  Future<String?> renameEntry(FileEntryEntity entry, String newName) async {
+    final currentState = state;
+    final moveEntry = _moveEntryUseCase;
+    if (currentState is! FileBrowserLoaded) return '页面尚未加载';
+    if (moveEntry == null) return '当前版本不支持重命名';
+    final from = NasPath(rootId: currentState.currentRootId, path: entry.path);
+    final to = from.parent().append(newName);
+    if (from == to) return null;
+    final result = await moveEntry.call(from, to);
+    if (result.isFailure) {
+      return humanizeFolderError(result.failureOrNull!.message);
+    }
+    _evictThumbnail(entry.path);
+    await refreshDirectoryEntries(currentState.currentPath);
+    return null;
+  }
+
+  /// 把多个文件/文件夹移动到 targetDirectory；返回给用户看的结果说明。
+  Future<String> moveEntries(
+    List<FileEntryEntity> entries,
+    NasPath targetDirectory,
+  ) async {
+    final currentState = state;
+    final moveEntry = _moveEntryUseCase;
+    if (currentState is! FileBrowserLoaded || entries.isEmpty) return '';
+    if (moveEntry == null) return '当前版本不支持移动';
+    var moved = 0;
+    String? firstError;
+    for (final entry in entries) {
+      final from = NasPath(
+        rootId: currentState.currentRootId,
+        path: entry.path,
+      );
+      final to = targetDirectory.append(entry.name);
+      if (from == to) continue;
+      if (entry.isDirectory &&
+          (targetDirectory.path == entry.path ||
+              targetDirectory.path.startsWith('${entry.path}/'))) {
+        firstError ??= '不能把文件夹移动到它自己里面';
+        continue;
+      }
+      final result = await moveEntry.call(from, to);
+      if (result.isSuccess) {
+        moved += 1;
+        _evictThumbnail(entry.path);
+      } else {
+        firstError ??= humanizeFolderError(result.failureOrNull!.message);
+      }
+    }
+    await refreshDirectoryEntries(currentState.currentPath);
+    final target = targetDirectory.isRoot ? '根目录' : targetDirectory.fileName;
+    if (firstError == null) return '已移动 $moved 项到“$target”';
+    if (moved == 0) return '移动失败：$firstError';
+    return '已移动 $moved 项，${entries.length - moved} 项失败：$firstError';
+  }
+
+  /// 列出某个目录下的子文件夹（给“移动到…”对话框用）。
+  Future<List<FileEntryEntity>> listSubfolders(NasPath path) async {
+    final result = await _listDirectoryUseCase.call(
+      ListDirectoryParams(
+        path: path,
+        category: _currentCategory,
+        limit: 1000,
+        sortBy: 'name',
+        sortOrder: 'asc',
+        folderView: true,
+      ),
+    );
+    return result.dataOrNull?.items
+            .where((e) => e.isDirectory)
+            .toList(growable: false) ??
+        const <FileEntryEntity>[];
+  }
+
+  static String humanizeFolderError(String raw) {
+    if (raw.contains('status code of 405') ||
+        raw.contains('status code of 501')) {
+      return '手机服务端版本太旧，不支持文件夹。请安装 1.1.0 或更高版本的服务端';
+    }
+    if (raw.contains('status code of 412') || raw.contains('already exists')) {
+      return '已存在同名的文件或文件夹';
+    }
+    if (raw.contains('status code of 409')) {
+      return '目标位置不存在或无效';
+    }
+    if (raw.contains('status code of 400')) {
+      return '名称无效';
+    }
+    if (raw.contains('status code of 403')) {
+      return '没有权限';
+    }
+    if (raw.contains('status code of 404')) {
+      return '文件已不存在，请刷新';
+    }
+    return raw;
   }
 
   Future<void> deleteFile(String filePath) async {
@@ -694,6 +830,7 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
         limit: _pageSize,
         sortBy: _currentSortBy,
         sortOrder: _currentSortOrder,
+        folderView: _folderView,
       ),
     );
   }
@@ -722,6 +859,7 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
         message: null,
         sortBy: _currentSortBy,
         sortOrder: _currentSortOrder,
+        folderView: _folderView,
       ),
     );
     _loadNextBatch();
@@ -732,7 +870,8 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
     required FileListPageEntity page,
     required FileBrowserLoaded previousState,
   }) {
-    if (previousState.currentCategory != _currentCategory) {
+    if (previousState.currentCategory != _currentCategory ||
+        previousState.folderView != _folderView) {
       _resetThumbnailWindow();
     }
 
@@ -763,6 +902,7 @@ class FileBrowserCubit extends Cubit<FileBrowserState> {
         message: null,
         sortBy: _currentSortBy,
         sortOrder: _currentSortOrder,
+        folderView: _folderView,
       ),
     );
 

@@ -188,6 +188,7 @@ class _HomeShellPageState extends State<HomeShellPage>
         FileBrowserCubit(
           listDirectoryUseCase: serviceLocator.listDirectoryUseCase,
           createFolderUseCase: serviceLocator.createFolderUseCase,
+          moveEntryUseCase: serviceLocator.moveEntryUseCase,
           deleteFileUseCase: serviceLocator.deleteFileUseCase,
           batchDeleteUseCase: serviceLocator.batchDeleteUseCase,
           loadVisibleThumbnailsUseCase:

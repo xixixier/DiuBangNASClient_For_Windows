@@ -32,6 +32,13 @@ class FakeFileCubit extends Cubit<FileBrowserState> implements FileBrowserCubit 
   @override
   String get currentRootId => 'fs';
   @override
+  bool get isFolderView {
+    final s = state;
+    return s is FileBrowserLoaded && s.folderView;
+  }
+  @override
+  bool get canMoveEntries => true;
+  @override
   Uint8List? getThumbnail(String filePath) => null;
   @override
   Stream<void> watchThumbnail(String filePath) => const Stream<void>.empty();

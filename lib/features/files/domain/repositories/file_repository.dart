@@ -10,6 +10,7 @@ abstract class FileRepository {
   );
   Future<AppResult<void>> createFolder(NasPath path);
   Future<AppResult<void>> deleteFile(NasPath path);
+  Future<AppResult<void>> moveEntry(NasPath from, NasPath to);
   Future<AppResult<List<BatchDeleteResultEntity>>> batchDelete(
     List<NasPath> paths,
   );

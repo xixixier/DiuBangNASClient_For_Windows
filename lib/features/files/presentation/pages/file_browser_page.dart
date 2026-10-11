@@ -53,6 +53,7 @@ class FileBrowserPage extends StatefulWidget {
 
 class _FileBrowserPageState extends State<FileBrowserPage> {
   static const _queueUploadToServerDirectory = QueueUploadToServerDirectory();
+  static const String _folderSegment = 'folders';
   static const String _prefViewMode = 'desktop_file_view_mode';
   static const String _prefTileExtent = 'desktop_file_tile_extent';
   static const double _minTileExtent = 110;
@@ -672,6 +673,27 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       _selectAll();
       return KeyEventResult.handled;
     }
+    if (state.folderView) {
+      final cubit = context.read<FileBrowserCubit>();
+      final alt = keyboard.isAltPressed;
+      if (ctrl && keyboard.isShiftPressed && key == LogicalKeyboardKey.keyN) {
+        unawaited(_createFolder());
+        return KeyEventResult.handled;
+      }
+      if (!state.currentPath.isRoot &&
+          (key == LogicalKeyboardKey.backspace ||
+              (alt &&
+                  (key == LogicalKeyboardKey.arrowUp ||
+                      key == LogicalKeyboardKey.arrowLeft)))) {
+        unawaited(cubit.navigateUp());
+        return KeyEventResult.handled;
+      }
+    }
+    if (key == LogicalKeyboardKey.f2) {
+      final selected = _selectedFiles(state);
+      if (selected.length == 1) unawaited(_renameEntry(selected.first));
+      return KeyEventResult.handled;
+    }
     if (ctrl &&
         (key == LogicalKeyboardKey.equal ||
             key == LogicalKeyboardKey.numpadAdd)) {
@@ -808,6 +830,14 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   }) async {
     final state = _loadedState;
     if (state == null || files.isEmpty) return;
+    final folderCount = files.where((f) => f.isDirectory).length;
+    if (folderCount > 0) {
+      files = files.where((f) => !f.isDirectory).toList(growable: false);
+      _showSnack(
+        files.isEmpty ? '暂不支持下载整个文件夹' : '暂不支持下载文件夹，已跳过 $folderCount 个文件夹',
+      );
+      if (files.isEmpty) return;
+    }
     String? directory;
     if (chooseFolder) {
       directory = await getDirectoryPath(confirmButtonText: '下载到此文件夹');
@@ -829,16 +859,21 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       return;
     }
     final cubit = context.read<FileBrowserCubit>();
+    final hasFolder = files.any((f) => f.isDirectory);
     final message = files.length == 1
         ? '确定要删除“${files.first.name}”吗？'
-        : '确定要删除这 ${files.length} 个文件吗？';
+        : '确定要删除这 ${files.length} 项吗？';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('删除文件'),
+        title: Text(hasFolder ? '删除' : '删除文件'),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
-          child: Text('$message\n删除后无法恢复。'),
+          child: Text(
+            hasFolder
+                ? '$message\n文件夹里的所有内容都会一起删除，且无法恢复。'
+                : '$message\n删除后无法恢复。',
+          ),
         ),
         actions: [
           TextButton(
@@ -929,6 +964,365 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   }
 
   // ---------------------------------------------------------------------------
+  // 文件夹：新建 / 重命名 / 移动 / 上传整个文件夹
+  // ---------------------------------------------------------------------------
+
+  static final RegExp _invalidNameChars = RegExp(r'[\\/:*?"<>|]');
+
+  String? _validateName(String name, {String? original}) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '名称不能为空';
+    if (trimmed == '.' || trimmed == '..') return '名称无效';
+    if (_invalidNameChars.hasMatch(trimmed)) {
+      return r'名称不能包含 \ / : * ? " < > |';
+    }
+    if (trimmed.startsWith('.')) return '名称不能以 . 开头';
+    final state = _loadedState;
+    if (state != null &&
+        trimmed != original &&
+        state.allFiles.any(
+          (f) => f.name.toLowerCase() == trimmed.toLowerCase(),
+        )) {
+      return '已存在同名的文件或文件夹';
+    }
+    return null;
+  }
+
+  Future<String?> _promptName({
+    required String title,
+    required String confirmLabel,
+    String initial = '',
+    String? original,
+    bool selectStem = false,
+  }) {
+    final controller = TextEditingController(text: initial);
+    final dot = initial.lastIndexOf('.');
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: selectStem && dot > 0 ? dot : initial.length,
+    );
+    String? error;
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          void submit() {
+            final message = _validateName(controller.text, original: original);
+            if (message != null) {
+              setDialogState(() => error = message);
+              return;
+            }
+            Navigator.pop(dialogContext, controller.text.trim());
+          }
+
+          return AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: 380,
+              child: TextField(
+                controller: controller,
+                autofocus: true,
+                onSubmitted: (_) => submit(),
+                onChanged: (_) {
+                  if (error != null) setDialogState(() => error = null);
+                },
+                decoration: InputDecoration(errorText: error, isDense: true),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('取消'),
+              ),
+              FilledButton(onPressed: submit, child: Text(confirmLabel)),
+            ],
+          );
+        },
+      ),
+    ).whenComplete(controller.dispose);
+  }
+
+  Future<void> _createFolder() async {
+    final state = _loadedState;
+    if (state == null || !state.folderView) return;
+    if (!state.currentRootWritable || state.currentRootId != 'fs') {
+      _showSnack('这里不能新建文件夹');
+      return;
+    }
+    final cubit = context.read<FileBrowserCubit>();
+    final name = await _promptName(
+      title: '新建文件夹',
+      confirmLabel: '创建',
+      initial: _uniqueName('新建文件夹', state),
+    );
+    if (name == null || !mounted) return;
+    final error = await cubit.createFolder(name);
+    if (!mounted) return;
+    if (error != null) {
+      _showSnack('新建文件夹失败：$error');
+      return;
+    }
+    final created = cubit.state;
+    if (created is FileBrowserLoaded) {
+      final path = created.currentPath.append(name).path;
+      _setSelection({path});
+    }
+  }
+
+  String _uniqueName(String base, FileBrowserLoaded state) {
+    final existing = state.allFiles.map((f) => f.name.toLowerCase()).toSet();
+    if (!existing.contains(base.toLowerCase())) return base;
+    for (var i = 2; ; i++) {
+      final candidate = '$base ($i)';
+      if (!existing.contains(candidate.toLowerCase())) return candidate;
+    }
+  }
+
+  Future<void> _renameEntry(FileEntryEntity entry) async {
+    final state = _loadedState;
+    final cubit = context.read<FileBrowserCubit>();
+    if (state == null || !cubit.canMoveEntries) return;
+    if (!state.currentRootWritable || state.currentRootId != 'fs') {
+      _showSnack('这里的文件不能重命名');
+      return;
+    }
+    final name = await _promptName(
+      title: entry.isDirectory ? '重命名文件夹' : '重命名',
+      confirmLabel: '重命名',
+      initial: entry.name,
+      original: entry.name,
+      selectStem: !entry.isDirectory,
+    );
+    if (name == null || name == entry.name || !mounted) return;
+    final error = await cubit.renameEntry(entry, name);
+    if (!mounted) return;
+    if (error != null) _showSnack('重命名失败：$error');
+  }
+
+  Future<void> _moveEntriesTo(List<FileEntryEntity> entries) async {
+    final state = _loadedState;
+    final cubit = context.read<FileBrowserCubit>();
+    if (state == null || entries.isEmpty || !cubit.canMoveEntries) return;
+    if (!state.currentRootWritable || state.currentRootId != 'fs') {
+      _showSnack('这里的文件不能移动');
+      return;
+    }
+    final target = await showDialog<NasPath>(
+      context: context,
+      builder: (_) => _MoveTargetDialog(
+        cubit: cubit,
+        rootId: state.currentRootId,
+        initialPath: state.folderView
+            ? state.currentPath
+            : NasPath.root(state.currentRootId),
+        movingFolders: entries
+            .where((e) => e.isDirectory)
+            .map((e) => e.path)
+            .toSet(),
+        count: entries.length,
+      ),
+    );
+    if (target == null || !mounted) return;
+    final message = await cubit.moveEntries(entries, target);
+    if (mounted && message.isNotEmpty) _showSnack(message);
+  }
+
+  /// 拖入整个文件夹：先在服务器上建好目录结构，再按目录分组排队上传。
+  Future<void> _uploadLocalFolders(
+    List<String> folders,
+    NasPath targetPath,
+  ) async {
+    final cubit = context.read<FileBrowserCubit>();
+    final transferCubit = context.read<TransferCubit>();
+    final createFolder = serviceLocator.createFolderUseCase;
+    var queued = 0;
+    var folderFailures = 0;
+    for (final folder in folders) {
+      final root = Directory(folder);
+      final rootName = root.uri.pathSegments.lastWhere(
+        (s) => s.isNotEmpty,
+        orElse: () => 'folder',
+      );
+      final groups = <String, List<String>>{'': <String>[]};
+      final directories = <String>[''];
+      try {
+        await for (final entity in root.list(
+          recursive: true,
+          followLinks: false,
+        )) {
+          final relative = entity.path
+              .substring(root.path.length)
+              .replaceAll('\\', '/')
+              .split('/')
+              .where((s) => s.isNotEmpty)
+              .toList();
+          if (relative.isEmpty || relative.any((s) => s.startsWith('.'))) {
+            continue;
+          }
+          if (entity is Directory) {
+            directories.add(relative.join('/'));
+          } else if (entity is File) {
+            final dir = relative.sublist(0, relative.length - 1).join('/');
+            groups.putIfAbsent(dir, () => <String>[]).add(entity.path);
+          }
+        }
+      } catch (error) {
+        if (mounted) _showSnack('读取文件夹失败：$error');
+        continue;
+      }
+
+      NasPath remoteFor(String relativeDir) {
+        var path = targetPath.append(rootName);
+        for (final part in relativeDir.split('/').where((s) => s.isNotEmpty)) {
+          path = path.append(part);
+        }
+        return path;
+      }
+
+      directories.sort((a, b) => a.length.compareTo(b.length));
+      for (final dir in directories) {
+        final result = await createFolder.call(remoteFor(dir));
+        final message = result.failureOrNull?.message ?? '';
+        if (result.isFailure && !message.contains('status code of 405')) {
+          folderFailures += 1;
+        } else if (result.isFailure && dir.isEmpty) {
+          // 根文件夹 405：可能已存在，也可能服务端太旧，后续上传会给出明确错误
+        }
+      }
+      if (!mounted) return;
+
+      for (final entry in groups.entries) {
+        if (entry.value.isEmpty || !mounted) continue;
+        final remote = remoteFor(entry.key);
+        try {
+          final result = await _queueUploadToServerDirectory.queueLocalPaths(
+            context,
+            transferCubit: transferCubit,
+            targetPath: remote,
+            paths: entry.value,
+          );
+          if (!mounted || result == null) continue;
+          queued += result.createdTasks.length;
+          _handleQueuedUploadResult(
+            context,
+            transferCubit: transferCubit,
+            targetRootId: remote.rootId,
+            targetPath: remote,
+            result: result,
+          );
+        } catch (error) {
+          if (mounted) _showSnack('上传失败：$error');
+        }
+      }
+    }
+    if (!mounted) return;
+    final current = cubit.state;
+    if (current is FileBrowserLoaded) {
+      await cubit.refreshDirectoryEntries(current.currentPath);
+    }
+    if (!mounted) return;
+    if (folderFailures > 0) {
+      _showSnack('有 $folderFailures 个文件夹创建失败，请确认手机服务端已升级到 1.1.0');
+    } else if (queued > 0) {
+      _showSnack('已加入 $queued 个文件到上传队列');
+    }
+  }
+
+  Widget _buildBreadcrumbBar(
+    BuildContext context,
+    FileBrowserCubit cubit,
+    FileBrowserLoaded state,
+  ) {
+    final segments = state.currentPath.segments;
+    final rootLabel = state.currentRootId == 'library' ? '原机' : '共享';
+    final primary = Theme.of(context).colorScheme.primary;
+    final canCreate = state.currentRootWritable && state.currentRootId == 'fs';
+
+    Widget crumb(String label, NasPath path, {required bool last}) {
+      return TextButton(
+        onPressed: last ? null : () => unawaited(cubit.navigateTo(path)),
+        style: TextButton.styleFrom(
+          minimumSize: const Size(0, 30),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          foregroundColor: DesktopTokens.textSecondary,
+          disabledForegroundColor: DesktopTokens.textPrimary,
+          // 用主题的 labelLarge 派生，保留 Windows 下的中文字体设置
+          textStyle: Theme.of(context).textTheme.labelLarge?.copyWith(
+            fontSize: 13,
+            fontWeight: last ? FontWeight.w600 : FontWeight.w400,
+          ),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 220),
+          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      );
+    }
+
+    final crumbs = <Widget>[
+      crumb(
+        rootLabel,
+        NasPath.root(state.currentRootId),
+        last: segments.isEmpty,
+      ),
+    ];
+    var path = NasPath.root(state.currentRootId);
+    for (var i = 0; i < segments.length; i++) {
+      path = path.append(segments[i]);
+      crumbs.add(
+        const Icon(
+          Icons.chevron_right_rounded,
+          size: 16,
+          color: DesktopTokens.textTertiary,
+        ),
+      );
+      crumbs.add(crumb(segments[i], path, last: i == segments.length - 1));
+    }
+
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(
+        horizontal: DesktopTokens.pagePadding,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: DesktopTokens.border)),
+      ),
+      child: Row(
+        children: [
+          ToolbarIconButton(
+            icon: Icons.arrow_upward_rounded,
+            tooltip: '上一级（Backspace）',
+            onPressed: state.currentPath.isRoot
+                ? null
+                : () => unawaited(cubit.navigateUp()),
+          ),
+          const SizedBox(width: 4),
+          Icon(Icons.folder_open_rounded, size: 18, color: primary),
+          const SizedBox(width: 2),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                reverse: true,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                  child: Row(children: crumbs),
+                ),
+              ),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: canCreate ? () => unawaited(_createFolder()) : null,
+            icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+            label: const Text('新建文件夹'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // 右键菜单
   // ---------------------------------------------------------------------------
 
@@ -998,6 +1392,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     if (selected.isEmpty) return;
     final single = selected.length == 1 ? selected.first : null;
     final writable = state.currentRootWritable;
+    final cubit = context.read<FileBrowserCubit>();
     unawaited(
       _showMenuAt(globalPosition, [
         if (single != null)
@@ -1008,7 +1403,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
             shortcut: 'Enter',
           ),
         _menuItem(
-          single != null ? '下载' : '下载 ${selected.length} 个文件',
+          single != null ? '下载' : '下载 ${selected.length} 项',
           Icons.download_rounded,
           () => _downloadFiles(selected),
         ),
@@ -1018,6 +1413,21 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           () => _downloadFiles(selected, chooseFolder: true),
         ),
         const PopupMenuDivider(height: 8),
+        if (single != null && cubit.canMoveEntries)
+          _menuItem(
+            '重命名',
+            Icons.drive_file_rename_outline_rounded,
+            () => _renameEntry(single),
+            shortcut: 'F2',
+            enabled: writable && state.currentRootId == 'fs',
+          ),
+        if (cubit.canMoveEntries)
+          _menuItem(
+            '移动到…',
+            Icons.drive_file_move_outline,
+            () => _moveEntriesTo(selected),
+            enabled: writable && state.currentRootId == 'fs',
+          ),
         if (single != null)
           _menuItem('复制文件名', Icons.copy_rounded, () {
             Clipboard.setData(ClipboardData(text: single.name));
@@ -1027,7 +1437,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
             Clipboard.setData(ClipboardData(text: single.path));
           }),
         _menuItem(
-          single != null ? '删除' : '删除 ${selected.length} 个文件',
+          single != null ? '删除' : '删除 ${selected.length} 项',
           Icons.delete_outline_rounded,
           () => _confirmDelete(selected),
           shortcut: 'Delete',
@@ -1066,6 +1476,22 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           () => _pickAndUploadMedia(context, cubit),
           enabled: writable,
         ),
+        if (state.folderView) ...[
+          _menuItem(
+            '新建文件夹',
+            Icons.create_new_folder_outlined,
+            _createFolder,
+            shortcut: 'Ctrl+Shift+N',
+            enabled: writable && state.currentRootId == 'fs',
+          ),
+          if (!state.currentPath.isRoot)
+            _menuItem(
+              '返回上一级',
+              Icons.arrow_upward_rounded,
+              () => unawaited(cubit.navigateUp()),
+              shortcut: 'Backspace',
+            ),
+        ],
         const PopupMenuDivider(height: 8),
         _menuItem(
           '大图标',
@@ -1102,19 +1528,23 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       return;
     }
     final files = <String>[];
-    var skippedFolders = 0;
+    final folders = <String>[];
     for (final item in details.files) {
       final path = item.path;
       if (path.isEmpty) continue;
       final type = FileSystemEntity.typeSync(path);
       if (type == FileSystemEntityType.directory) {
-        skippedFolders += 1;
+        folders.add(path);
       } else if (type == FileSystemEntityType.file) {
         files.add(path);
       }
     }
-    if (skippedFolders > 0) {
-      _showSnack('暂不支持上传文件夹，已跳过 $skippedFolders 个文件夹');
+    if (folders.isNotEmpty) {
+      if (state.currentRootId != 'fs') {
+        _showSnack('这里不能上传文件夹，已跳过 ${folders.length} 个文件夹');
+      } else {
+        await _uploadLocalFolders(folders, state.currentPath);
+      }
     }
     if (files.isEmpty || !mounted) return;
     final transferCubit = context.read<TransferCubit>();
@@ -1524,6 +1954,8 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                 children: [
                   _buildHeader(context, cubit, state),
                   _buildCommandBar(context, cubit, state),
+                  if (state is FileBrowserLoaded && state.folderView)
+                    _buildBreadcrumbBar(context, cubit, state),
                   if (state is FileBrowserLoaded && _viewMode == _ViewMode.list)
                     Padding(
                       padding: const EdgeInsets.symmetric(
@@ -1567,7 +1999,9 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
             style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(
               isDense: true,
-              hintText: '搜索当前分类（Ctrl+F）',
+              hintText: cubit.isFolderView
+                  ? '搜索当前文件夹（Ctrl+F）'
+                  : '搜索当前分类（Ctrl+F）',
               hintStyle: const TextStyle(
                 fontSize: 13,
                 color: DesktopTokens.textTertiary,
@@ -1729,29 +2163,48 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
 
           return Row(
             children: [
-              DesktopSegmented<FileCategory>(
-                selected: cubit.currentCategory,
-                onChanged: loaded == null ? null : cubit.switchCategory,
+              DesktopSegmented<String>(
+                selected: cubit.isFolderView
+                    ? _folderSegment
+                    : cubit.currentCategory.name,
+                onChanged: loaded == null
+                    ? null
+                    : (value) {
+                        if (value == _folderSegment) {
+                          unawaited(cubit.switchToFolderView());
+                        } else {
+                          unawaited(
+                            cubit.switchCategory(
+                              FileCategory.values.byName(value),
+                            ),
+                          );
+                        }
+                      },
                 segments: [
                   DesktopSegment(
-                    value: FileCategory.photo,
+                    value: _folderSegment,
+                    label: '文件夹',
+                    icon: compact ? null : Icons.folder_copy_outlined,
+                  ),
+                  DesktopSegment(
+                    value: FileCategory.photo.name,
                     label: '照片',
                     icon: compact ? null : Icons.image_outlined,
                   ),
                   DesktopSegment(
-                    value: FileCategory.video,
+                    value: FileCategory.video.name,
                     label: '视频',
                     icon: compact ? null : Icons.movie_outlined,
                   ),
                   DesktopSegment(
-                    value: FileCategory.document,
+                    value: FileCategory.document.name,
                     label: '文档',
                     icon: compact ? null : Icons.description_outlined,
                   ),
                   DesktopSegment(
-                    value: FileCategory.other,
+                    value: FileCategory.other.name,
                     label: '其他',
-                    icon: compact ? null : Icons.folder_outlined,
+                    icon: compact ? null : Icons.category_outlined,
                   ),
                 ],
               ),
@@ -1792,6 +2245,12 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                   '下载到…',
                   () => _downloadFiles(selected, chooseFolder: true),
                 ),
+                if (cubit.canMoveEntries && loaded!.currentRootId == 'fs')
+                  action(
+                    Icons.drive_file_move_outline,
+                    '移动到…',
+                    writable ? () => _moveEntriesTo(selected) : null,
+                  ),
                 action(
                   Icons.delete_outline_rounded,
                   '删除',
@@ -1902,6 +2361,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                               child: _EmptyCategoryHint(
                                 searching: _searchQuery.trim().isNotEmpty,
                                 writable: state.currentRootWritable,
+                                folder: state.folderView,
                               ),
                             )
                           else if (_viewMode == _ViewMode.grid)
@@ -2187,7 +2647,9 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                   foregroundColor: active.isEmpty
                       ? DesktopTokens.textSecondary
                       : Theme.of(context).colorScheme.primary,
-                  textStyle: const TextStyle(fontSize: 12),
+                  textStyle: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontSize: 12),
                 ),
                 icon: active.isEmpty
                     ? const Icon(Icons.swap_vert_rounded, size: 16)
@@ -2207,10 +2669,15 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
 }
 
 class _EmptyCategoryHint extends StatelessWidget {
-  const _EmptyCategoryHint({required this.searching, required this.writable});
+  const _EmptyCategoryHint({
+    required this.searching,
+    required this.writable,
+    this.folder = false,
+  });
 
   final bool searching;
   final bool writable;
+  final bool folder;
 
   @override
   Widget build(BuildContext context) {
@@ -2225,7 +2692,7 @@ class _EmptyCategoryHint extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            searching ? '没有匹配的文件' : '这里还没有文件',
+            searching ? '没有匹配的文件' : (folder ? '这个文件夹是空的' : '这里还没有文件'),
             style: const TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w600,
@@ -2234,9 +2701,12 @@ class _EmptyCategoryHint extends StatelessWidget {
           ),
           if (!searching && writable) ...[
             const SizedBox(height: 6),
-            const Text(
-              '把文件拖到这里，或点击右上角“上传”',
-              style: TextStyle(fontSize: 13, color: DesktopTokens.textTertiary),
+            Text(
+              folder ? '把文件或文件夹拖到这里，或点击右上角“上传”' : '把文件拖到这里，或点击右上角“上传”',
+              style: const TextStyle(
+                fontSize: 13,
+                color: DesktopTokens.textTertiary,
+              ),
             ),
           ],
         ],
@@ -2386,4 +2856,155 @@ class _TrackedUploadTask {
   final String directoryPath;
 
   const _TrackedUploadTask({required this.rootId, required this.directoryPath});
+}
+
+/// “移动到…”对话框：逐级浏览服务器上的文件夹，选中目标位置。
+class _MoveTargetDialog extends StatefulWidget {
+  const _MoveTargetDialog({
+    required this.cubit,
+    required this.rootId,
+    required this.initialPath,
+    required this.movingFolders,
+    required this.count,
+  });
+
+  final FileBrowserCubit cubit;
+  final String rootId;
+  final NasPath initialPath;
+  final Set<String> movingFolders;
+  final int count;
+
+  @override
+  State<_MoveTargetDialog> createState() => _MoveTargetDialogState();
+}
+
+class _MoveTargetDialogState extends State<_MoveTargetDialog> {
+  late NasPath _path = widget.initialPath;
+  List<FileEntryEntity> _folders = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load(_path));
+  }
+
+  Future<void> _load(NasPath path) async {
+    setState(() {
+      _path = path;
+      _loading = true;
+    });
+    final folders = await widget.cubit.listSubfolders(path);
+    if (!mounted || _path != path) return;
+    setState(() {
+      _folders = folders
+          .where((f) => !widget.movingFolders.contains(f.path))
+          .toList(growable: false);
+      _loading = false;
+    });
+  }
+
+  bool get _targetInvalid => widget.movingFolders.any(
+    (p) => _path.path == p || _path.path.startsWith('$p/'),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final label = _path.isRoot ? '共享（根目录）' : _path.path.substring(1);
+    return AlertDialog(
+      title: Text('移动 ${widget.count} 项到…'),
+      content: SizedBox(
+        width: 440,
+        height: 360,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                ToolbarIconButton(
+                  icon: Icons.arrow_upward_rounded,
+                  tooltip: '上一级',
+                  onPressed: _path.isRoot
+                      ? null
+                      : () => unawaited(_load(_path.parent())),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border.all(color: DesktopTokens.border),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _folders.isEmpty
+                    ? const Center(
+                        child: Text(
+                          '这里没有子文件夹',
+                          style: TextStyle(color: DesktopTokens.textTertiary),
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: _folders.length,
+                        itemBuilder: (context, index) {
+                          final folder = _folders[index];
+                          return ListTile(
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                            ),
+                            leading: const Icon(
+                              Icons.folder_rounded,
+                              color: Color(0xFF3D8A5A),
+                            ),
+                            title: Text(
+                              folder.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: const Icon(
+                              Icons.chevron_right_rounded,
+                              size: 18,
+                            ),
+                            onTap: () => unawaited(
+                              _load(
+                                NasPath(
+                                  rootId: widget.rootId,
+                                  path: folder.path,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _loading || _targetInvalid
+              ? null
+              : () => Navigator.pop(context, _path),
+          child: const Text('移动到这里'),
+        ),
+      ],
+    );
+  }
 }

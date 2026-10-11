@@ -61,6 +61,7 @@ import '../../features/files/data/repositories/file_repository_impl.dart';
 import '../../features/files/domain/repositories/file_repository.dart';
 import '../../features/files/application/use_cases/list_directory_use_case.dart';
 import '../../features/files/application/use_cases/create_folder_use_case.dart';
+import '../../features/files/application/use_cases/move_entry_use_case.dart';
 import '../../features/files/application/use_cases/delete_file_use_case.dart';
 import '../../features/files/application/use_cases/batch_delete_use_case.dart';
 import '../../features/files/application/use_cases/is_root_writable_use_case.dart';
@@ -524,6 +525,10 @@ class ServiceLocator {
 
   CreateFolderUseCase get createFolderUseCase {
     return CreateFolderUseCase(repository: fileRepository);
+  }
+
+  MoveEntryUseCase get moveEntryUseCase {
+    return MoveEntryUseCase(repository: fileRepository);
   }
 
   DeleteFileUseCase get deleteFileUseCase {

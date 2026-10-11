@@ -275,6 +275,12 @@ class WebdavFileProtocolClient
           ? (hasLeading ? '/' : '')
           : '/${decodedParts.join('/')}';
 
+      // 子目录的自身条目 href 可能是百分号编码的，解码后再判断一次
+      final normalizedSelf = nasPath.path.endsWith('/') && nasPath.path != '/'
+          ? nasPath.path.substring(0, nasPath.path.length - 1)
+          : nasPath.path;
+      if (decodedRelativePath == normalizedSelf) continue;
+
       final decodedDisplayName = displayName.isNotEmpty
           ? displayName
           : (decodedParts.isNotEmpty ? decodedParts.last : displayName);
@@ -394,6 +400,21 @@ class WebdavFileProtocolClient
     } catch (_) {
       rethrow;
     }
+  }
+
+  @override
+  Future<void> move(NasPath from, NasPath to, {bool overwrite = false}) async {
+    await _dio.request(
+      _buildUrl(from),
+      options: Options(
+        method: 'MOVE',
+        headers: {
+          'Authorization': _currentAuthHeader,
+          'Destination': _buildUrl(to),
+          'Overwrite': overwrite ? 'T' : 'F',
+        },
+      ),
+    );
   }
 
   @override

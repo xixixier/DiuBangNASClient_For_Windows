@@ -27,6 +27,9 @@ class FileRepositoryImpl implements FileRepository {
   Future<AppResult<FileListPageEntity>> listDirectory(
     ListDirectoryParams params,
   ) async {
+    if (params.folderView) {
+      return _listFolder(params);
+    }
     try {
       final response = await _apiClient.get<Map<String, dynamic>>(
         '/api/v1/files/list',
@@ -77,6 +80,85 @@ class FileRepositoryImpl implements FileRepository {
           ),
         );
       }
+    }
+  }
+
+  /// 文件夹视图：WebDAV 列出当前目录，文件夹在前，其余按排序设置。
+  Future<AppResult<FileListPageEntity>> _listFolder(
+    ListDirectoryParams params,
+  ) async {
+    try {
+      final entries = await _protocolClient.listDirectory(params.path);
+      final sorted = sortFolderEntries(
+        entries,
+        sortBy: params.sortBy,
+        sortOrder: params.sortOrder,
+      );
+      final offset = _parseCursor(params.cursor);
+      final start = offset.clamp(0, sorted.length);
+      final end = (start + params.limit).clamp(0, sorted.length);
+      final hasMore = end < sorted.length;
+      return Success(
+        FileListPageEntity(
+          items: sorted.sublist(start, end),
+          hasMore: hasMore,
+          nextCursor: hasMore ? '$end' : null,
+        ),
+      );
+    } catch (e) {
+      return Failure(
+        AppFailure.fromException(
+          code: 'LIST_ERROR',
+          message: 'Failed to list directory: ${e.toString()}',
+        ),
+      );
+    }
+  }
+
+  static List<FileEntryEntity> sortFolderEntries(
+    List<FileEntryEntity> entries, {
+    String? sortBy,
+    String? sortOrder,
+  }) {
+    final ascending = sortOrder == 'asc';
+    int compareValue(FileEntryEntity a, FileEntryEntity b) {
+      if (sortBy == 'size' && a.isFile && b.isFile) {
+        return a.size.compareTo(b.size);
+      }
+      if (sortBy == 'name' || (sortBy == 'size' && !a.isFile)) {
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      }
+      final am = a.modifiedAt?.millisecondsSinceEpoch ?? 0;
+      final bm = b.modifiedAt?.millisecondsSinceEpoch ?? 0;
+      return am.compareTo(bm);
+    }
+
+    final list = List<FileEntryEntity>.from(entries);
+    list.sort((a, b) {
+      if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
+      // 文件夹始终按名称升序，方便查找
+      if (a.isDirectory) {
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      }
+      final c = compareValue(a, b);
+      if (c != 0) return ascending ? c : -c;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    return list;
+  }
+
+  @override
+  Future<AppResult<void>> moveEntry(NasPath from, NasPath to) async {
+    try {
+      await _protocolClient.move(from, to);
+      return const Success(null);
+    } catch (e) {
+      return Failure(
+        AppFailure.fromException(
+          code: 'MOVE_ERROR',
+          message: 'Failed to move: ${e.toString()}',
+        ),
+      );
     }
   }
 

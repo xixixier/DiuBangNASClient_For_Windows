@@ -10,6 +10,9 @@ abstract class FileProtocolClient {
   Future<List<FileEntryEntity>> listDirectory(NasPath path);
   Future<void> createDirectory(NasPath path);
   Future<void> delete(NasPath path);
+
+  /// 移动或重命名（WebDAV MOVE）。overwrite 为 false 时目标已存在会失败。
+  Future<void> move(NasPath from, NasPath to, {bool overwrite = false});
   Future<UploadResult> upload({
     required NasPath targetPath,
     required Stream<List<int>> sourceStream,

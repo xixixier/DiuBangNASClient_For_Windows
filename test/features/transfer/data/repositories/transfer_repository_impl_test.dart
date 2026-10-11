@@ -78,6 +78,11 @@ class _NoopFileProtocolClient implements FileProtocolClient {
   }
 
   @override
+  Future<void> move(NasPath from, NasPath to, {bool overwrite = false}) {
+    throw UnimplementedError();
+  }
+
+  @override
   Future<Stream<List<int>>> download({
     required NasPath sourcePath,
     void Function(int received)? onProgress,

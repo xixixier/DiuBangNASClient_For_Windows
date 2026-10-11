@@ -300,6 +300,11 @@ class _FakeFileRepository implements FileRepository {
   }
 
   @override
+  Future<AppResult<void>> moveEntry(NasPath from, NasPath to) {
+    throw UnimplementedError();
+  }
+
+  @override
   Future<AppResult<List<BatchDeleteResultEntity>>> batchDelete(
     List<NasPath> paths,
   ) {

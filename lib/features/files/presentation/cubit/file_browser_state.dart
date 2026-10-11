@@ -32,7 +32,11 @@ class FileBrowserLoaded extends FileBrowserState {
     this.thumbnailVersion = 0,
     this.sortBy,
     this.sortOrder,
+    this.folderView = false,
   });
+
+  /// 是否处于文件夹视图（逐级浏览真实目录）
+  final bool folderView;
 
   final List<FileEntryEntity> allFiles;
   final List<FileEntryEntity> filteredFiles;
@@ -48,8 +52,10 @@ class FileBrowserLoaded extends FileBrowserState {
   final bool isLoadingMore;
   final String? message;
   final int thumbnailVersion;
+
   /// 当前排序字段：'modified' | 'size'，null 表示默认（modified）
   final String? sortBy;
+
   /// 当前排序方向：'asc' | 'desc'，null 表示默认（desc）
   final String? sortOrder;
 
@@ -70,6 +76,7 @@ class FileBrowserLoaded extends FileBrowserState {
     int? thumbnailVersion,
     String? sortBy,
     String? sortOrder,
+    bool? folderView,
   }) {
     return FileBrowserLoaded(
       allFiles: allFiles ?? this.allFiles,
@@ -88,6 +95,7 @@ class FileBrowserLoaded extends FileBrowserState {
       thumbnailVersion: thumbnailVersion ?? this.thumbnailVersion,
       sortBy: sortBy ?? this.sortBy,
       sortOrder: sortOrder ?? this.sortOrder,
+      folderView: folderView ?? this.folderView,
     );
   }
 }
