@@ -75,10 +75,12 @@ class _VideoPreviewViewState extends State<VideoPreviewView> {
   bool _isReady = false;
   bool _hasError = false;
   String? _errorMessage;
+  bool _pendingErrorCheck = false;
   int _loadVersion = 0;
 
   /// 当前播放倍速
   double _playbackSpeed = 1.0;
+
   /// 倍速 Notifier，驱动 bottomButtonBar 中倍速按钮更新
   ///（绕过 MaterialVideoControlsTheme.updateShouldNotify 不通知的问题，见 media_kit issue #653）
   final ValueNotifier<double> _speedNotifier = ValueNotifier(1.0);
@@ -240,7 +242,11 @@ class _VideoPreviewViewState extends State<VideoPreviewView> {
       if (platform is NativePlayer) {
         final mpvConfigs = <String, String>{
           'cache-on-disk': 'no',
-          'stream-lavf-o': 'short_seek_size=2097152',
+          // reconnect*：读超时/断流时 FFmpeg 自动重连续传，避免一次 TCP 超时
+          // （tcp: ffurl_read returned 0xffffff76 = ETIMEDOUT）中断播放。
+          'stream-lavf-o':
+              'short_seek_size=2097152,reconnect=1,reconnect_streamed=1,'
+              'reconnect_on_network_error=1,reconnect_delay_max=5',
           'demuxer-readahead-secs': '15',
           'demuxer-max-back-bytes': '33554432',
           'demuxer-lavf-buffersize': '4194304',
@@ -321,11 +327,40 @@ class _VideoPreviewViewState extends State<VideoPreviewView> {
     _errorSub = player.stream.error.listen((error) {
       if (!mounted) return;
       _appendDebugLog('播放错误：$error');
+      if (!_isReady) {
+        setState(() {
+          _hasError = true;
+          _errorMessage = error;
+        });
+        return;
+      }
+      // 播放中的错误多数是可恢复的（网络读超时后 mpv 会重连，声音画面继续），
+      // 不能直接用错误页盖住画面。观察几秒：进度还在走就忽略，真正卡死才报错。
+      _verifyPlaybackAfterError(player, error);
+    });
+  }
+
+  Future<void> _verifyPlaybackAfterError(Player player, String error) async {
+    if (_pendingErrorCheck) return;
+    _pendingErrorCheck = true;
+    try {
+      final before = player.state.position;
+      await Future<void>.delayed(const Duration(seconds: 5));
+      if (!mounted || _player != player) return;
+      final state = player.state;
+      final progressed = state.position != before;
+      final userPaused = !state.playing && !state.buffering;
+      if (progressed || userPaused || state.completed || state.buffering) {
+        _appendDebugLog('播放错误已恢复，忽略：$error');
+        return;
+      }
       setState(() {
         _hasError = true;
         _errorMessage = error;
       });
-    });
+    } finally {
+      _pendingErrorCheck = false;
+    }
   }
 
   Future<void> _disposeController() async {
